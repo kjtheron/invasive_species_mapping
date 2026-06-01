@@ -1,0 +1,69 @@
+[project]
+name = "catchment-mrv"
+version = "0.0.1"
+description = "Phase 0 prototype: catchment-scale IAP + native-class MRV for the Berg River"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "pyogrio>=0.9",
+    "pyarrow>=17",
+    "fsspec>=2024.10",
+    "gcsfs>=2024.10",
+    "google-cloud-storage>=2.18",
+    "numpy>=1.26,<3",
+    "tyro>=0.9",
+    "pydantic-settings>=2.5",
+    "loguru>=0.7",
+    "requests>=2.32",
+    "pyyaml>=6",
+    "pygbif>=0.6.6",
+    "pytaxize>=0.7.0",
+    "setuptools>=82.0.1",
+    "pdfplumber>=0.11.9",
+    "rasterio>=1.5.0",
+    "rio-cogeo>=7.0.2",
+    "pystac-client>=0.9.0",
+    "stackstac>=0.5.1",
+    "planetary-computer>=1.0.0",
+    "rioxarray>=0.22.0",
+    "xarray>=2026.4.0",
+    "duckdb>=1.5.2",
+    "azure-storage-blob>=12.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.7",
+    "pyright>=1.1",
+]
+
+[project.scripts]
+cmrv = "cmrv.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cmrv"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "W"]
+
+[tool.pyright]
+include = ["src/cmrv"]
+pythonVersion = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "smoke: end-to-end smoke tests",
+]

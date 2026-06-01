@@ -1,0 +1,40 @@
+aoi:
+  path: gs://ism-data/aoi/berg_upper.parquet
+  # codes: [G10A, G10B, G10C]  # DWS quaternary codes for upper Berg River
+  crs_utm: EPSG:32734  # UTM 34S — true-area work for tile grid
+  tile_km: 10
+
+# Months chosen to capture seasonal phenology of IAPs vs natives.
+#
+# IMPORTANT — YYYY semantics differ by consumer:
+#   • `cmrv ingest-month`  → uses these dates literally (target year 2023 for
+#                            max label overlap with GBIF, BioSCape VegPlots,
+#                            and BioSCape AVIRIS Oct–Nov 2023 flights).
+#   • `cmrv ingest-chips`  → IGNORES the year. chips.py `temporal_windows`
+#                            substitutes each label's event_date year, so all
+#                            four windows are pulled from the SAME calendar
+#                            year as the label (single-year phenology).
+#
+# Keep all four windows in the SAME calendar year (e.g. all 2023) so that
+# `ingest-month` produces a self-consistent stack.
+months:
+  - {start: "2023-10-01", end: "2023-10-31", label: oct}
+  - {start: "2023-08-01", end: "2023-08-31", label: aug}
+  - {start: "2023-01-01", end: "2023-01-31", label: jan}
+  - {start: "2023-04-01", end: "2023-04-30", label: apr}
+
+s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
+# Scene-level cloud cover cap. SCL masking handles per-pixel cloud removal,
+# so this is set permissively (95) — letting more candidate scenes into the
+# monthly median, after which SCL strips the bad pixels per-scene.
+cloud_cover_max: 95
+
+paths:
+  bucket: gs://ism-data
+  tiles: gs://ism-data/aoi/tiles.parquet
+  raw_prefix: gs://ism-data/raw
+  sr_prefix: gs://ism-data/sr
+  labels_prefix: gs://ism-data/labels
+  embeddings_prefix: gs://ism-data/embeddings
+  runs_prefix: gs://ism-data/runs
+  outputs_prefix: gs://ism-data/outputs
