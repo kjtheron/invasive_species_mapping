@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cmrv.labels.classmap import build_lookup, gbif_taxa_from_schema
+from cmrv.labels.classmap import build_lookup
 
 
 def _write_schema(tmp_path: Path, body: dict) -> Path:
@@ -29,9 +29,9 @@ def test_members_exact_match(tmp_path):
         },
     )
     cm = build_lookup(schema, "test12")
-    assert cm.resolve("Acacia mearnsii") == (0, "exact")
-    assert cm.resolve("acacia cyclops") == (1, "exact")
-    assert cm.resolve("Acacia saligna") == (1, "exact")
+    assert cm.resolve("Acacia mearnsii") == 0
+    assert cm.resolve("acacia cyclops") == 1
+    assert cm.resolve("Acacia saligna") == 1
 
 
 def test_genus_fallback_only_when_enabled(tmp_path):
@@ -55,31 +55,23 @@ def test_genus_fallback_only_when_enabled(tmp_path):
         },
     )
     cm = build_lookup(schema, "test12")
-    assert cm.resolve("Pinus halepensis") == (4, "genus_fallback")
-    # No genus fallback for hakea — uncovered species drops
-    assert cm.resolve("Hakea drupacea") == (None, "unmapped")
-    # Exact still wins over genus fallback
-    assert cm.resolve("Pinus pinaster") == (4, "exact")
+    assert cm.resolve("Pinus halepensis") == 4  # genus fallback
+    assert cm.resolve("Hakea drupacea") is None  # hakea has no genus fallback
+    assert cm.resolve("Pinus pinaster") == 4  # exact
 
 
 def test_unmapped_returns_none(tmp_path):
     schema = _write_schema(
         tmp_path,
-        {
-            "class_maps": {
-                "test12": {0: {"name": "x", "members": ["Acacia mearnsii"]}}
-            }
-        },
+        {"class_maps": {"test12": {0: {"name": "x", "members": ["Acacia mearnsii"]}}}},
     )
     cm = build_lookup(schema, "test12")
-    assert cm.resolve("Banksia integrifolia") == (None, "unmapped")
-    assert cm.resolve("") == (None, "unmapped")
-    assert cm.resolve(None) == (None, "unmapped")
+    assert cm.resolve("Banksia integrifolia") is None
+    assert cm.resolve("") is None
+    assert cm.resolve(None) is None
 
 
-def test_validation_warns_on_duplicate_binomial(tmp_path, caplog):
-    import logging
-
+def test_validation_does_not_raise_on_duplicate_binomial(tmp_path):
     schema = _write_schema(
         tmp_path,
         {
@@ -91,14 +83,11 @@ def test_validation_warns_on_duplicate_binomial(tmp_path, caplog):
             }
         },
     )
-    with caplog.at_level(logging.WARNING):
-        build_lookup(schema, "test12")
-    # Loguru routes through stderr, but the test still confirms no exception raised.
-    # We can't easily capture loguru in caplog without a propagation handler;
-    # behavior assertion is "build_lookup does not raise on duplicate".
+    # Duplicate binomial across classes warns (loguru→stderr) but never raises.
+    build_lookup(schema, "test12")
 
 
-def test_validation_warns_genus_fallback_without_genus(tmp_path):
+def test_genus_fallback_without_genus_infers_from_member(tmp_path):
     schema = _write_schema(
         tmp_path,
         {
@@ -115,53 +104,19 @@ def test_validation_warns_genus_fallback_without_genus(tmp_path):
         },
     )
     cm = build_lookup(schema, "test12")
-    assert cm.resolve("Pinus halepensis") == (4, "genus_fallback")
+    assert cm.resolve("Pinus halepensis") == 4
 
 
-def test_legacy_species_map_fallback(tmp_path):
-    """Old-shape schema (top-level species_map) still resolves."""
-    schema = _write_schema(
-        tmp_path,
-        {
-            "class_maps": {"test12": {0: {"name": "a"}, 4: {"name": "p"}}},
-            "species_map": {
-                "acacia mearnsii": 0,
-                "pinus pinaster": 4,
-                "pinus": 4,  # genus-only entry → genus fallback under legacy shape
-            },
-        },
-    )
-    cm = build_lookup(schema, "test12")
-    assert cm.resolve("Acacia mearnsii") == (0, "exact")
-    assert cm.resolve("Pinus halepensis") == (4, "genus_fallback")
+def test_no_members_raises(tmp_path):
+    schema = _write_schema(tmp_path, {"class_maps": {"test12": {0: {"name": "a"}}}})
+    with pytest.raises(ValueError, match="no members"):
+        build_lookup(schema, "test12")
 
 
 def test_unknown_class_map_raises(tmp_path):
     schema = _write_schema(tmp_path, {"class_maps": {"foo": {0: {"members": ["X"]}}}})
     with pytest.raises(KeyError):
         build_lookup(schema, "bar")
-
-
-def test_gbif_taxa_from_schema_dedups_and_carries_class_id(tmp_path):
-    schema = _write_schema(
-        tmp_path,
-        {
-            "class_maps": {
-                "test12": {
-                    0: {"name": "a", "members": ["Acacia mearnsii"]},
-                    1: {"name": "b", "members": ["Acacia saligna", "Acacia cyclops"]},
-                    7: {"name": "rip", "members": ["Populus alba", "Populus alba"]},
-                }
-            }
-        },
-    )
-    taxa = gbif_taxa_from_schema(schema, "test12")
-    names = [t["name"] for t in taxa]
-    assert names.count("Populus alba") == 1
-    by_name = {t["name"]: t["class_id"] for t in taxa}
-    assert by_name["Acacia mearnsii"] == 0
-    assert by_name["Acacia cyclops"] == 1
-    assert by_name["Populus alba"] == 7
 
 
 def test_real_schema_round_trip():
@@ -171,9 +126,8 @@ def test_real_schema_round_trip():
     if not schema.exists():
         pytest.skip("real schema not present")
     cm = build_lookup(schema, "upper_berg_12")
-    # Pre-refactor parity spot checks
-    assert cm.resolve("Acacia mearnsii") == (0, "exact")
-    assert cm.resolve("Acacia cyclops") == (1, "exact")
-    assert cm.resolve("Pinus halepensis")[1] in ("exact", "genus_fallback")
-    assert cm.resolve("Eucalyptus diversicolor") == (5, "genus_fallback")
-    assert cm.resolve("Hakea drupacea") == (None, "unmapped")  # hakea has no genus_fallback
+    assert cm.resolve("Acacia mearnsii") == 0
+    assert cm.resolve("Acacia cyclops") == 1
+    assert cm.resolve("Pinus halepensis") == 4  # member of pinus_spp
+    assert cm.resolve("Eucalyptus diversicolor") == 5  # genus fallback
+    assert cm.resolve("Hakea drupacea") is None  # hakea has no genus_fallback

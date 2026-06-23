@@ -23,7 +23,7 @@ def _print_section(title: str) -> None:
 
 
 def chip_stats(
-    manifest_uri: str = "gs://ism-data/chips/train/manifest.parquet",
+    manifest_uri: str = "data/chips/train/manifest.parquet",
     top_species: int = 30,
     top_blocks: int = 10,
 ) -> None:
@@ -32,7 +32,7 @@ def chip_stats(
     Parameters
     ----------
     manifest_uri : str
-        Path to ``manifest.parquet`` (local or ``gs://``).
+        Path to ``manifest.parquet``.
     top_species : int
         Number of top species (by obs_id count) to list.
     top_blocks : int
@@ -55,10 +55,7 @@ def chip_stats(
     if "x_utm" in m.columns and "y_utm" in m.columns:
         x0, x1 = m["x_utm"].min(), m["x_utm"].max()
         y0, y1 = m["y_utm"].min(), m["y_utm"].max()
-        print(
-            f"  spatial extent:     {(x1 - x0) / 1000:.0f} km × "
-            f"{(y1 - y0) / 1000:.0f} km (UTM)"
-        )
+        print(f"  spatial extent:     {(x1 - x0) / 1000:.0f} km × {(y1 - y0) / 1000:.0f} km (UTM)")
 
     # --- species ---
     species_obs = (
@@ -99,38 +96,25 @@ def chip_stats(
 
     # --- spatial: per-block top species (concentration check) ---
     if "block_id" in m.columns:
-        per_block = (
-            m.groupby("block_id")["obs_id"]
-            .nunique()
-            .sort_values(ascending=False)
-        )
+        per_block = m.groupby("block_id")["obs_id"].nunique().sort_values(ascending=False)
         _print_section(f"Top {top_blocks} densest blocks (by obs_id count)")
         print(per_block.head(top_blocks).to_string())
 
         # Single-block dominance: which species have >50% of obs_ids in one block?
-        sp_block = (
-            m.groupby(["species", "block_id"])["obs_id"]
-            .nunique()
-            .reset_index(name="n")
-        )
+        sp_block = m.groupby(["species", "block_id"])["obs_id"].nunique().reset_index(name="n")
         sp_total = sp_block.groupby("species")["n"].sum()
         sp_max = sp_block.groupby("species")["n"].max()
         dom = (sp_max / sp_total).rename("max_frac_one_block")
         dominated = dom[(dom >= 0.5) & (sp_total >= 50)].sort_values(ascending=False)
         if len(dominated):
             _print_section(
-                "Spatially-dominated species (≥50 obs_ids, >50% in one block) "
-                "— spatial split risk"
+                "Spatially-dominated species (≥50 obs_ids, >50% in one block) — spatial split risk"
             )
             print(dominated.head(20).to_string())
 
     # --- folds (only if make-split has run) ---
     if has_fold:
-        fold_counts = (
-            m.groupby(["fold", "species"])["obs_id"]
-            .nunique()
-            .unstack(fill_value=0)
-        )
+        fold_counts = m.groupby(["fold", "species"])["obs_id"].nunique().unstack(fill_value=0)
         _print_section("Fold × species (top 15 species)")
         top15 = species_obs.head(15).index
         present = [c for c in top15 if c in fold_counts.columns]

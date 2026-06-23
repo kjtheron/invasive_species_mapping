@@ -1,17 +1,18 @@
-# Label schema for Phase 0.
+# Label schema for Phase 0 (Lens A — Invasive Alien Plants).
 #
-# Class IDs are stable integers. nodata=255 (ignore at training).
-# ``class_id`` is NEVER assigned at ingest — training configs crosswalk
-# (species_normalized → class_id) via class_maps.<name>.<id>.members[] below.
-# The same canonical occurrence parquet feeds both upper_berg_12 and
-# wc_nemba_full training runs.
+# Class IDs are stable integers. ``class_id`` is NEVER assigned at ingest —
+# training subsets crosswalk (species_normalized → class_id) via
+# class_maps.<name>.<id>.members[] below, applied at `cmrv make-split` time.
+#
+# Phase 0 is IAP-species-only: native / background classes (fynbos, indigenous
+# forest, other land cover) are DEFERRED — "not-IAP" is handled downstream by
+# OOD novelty flagging, not an explicit class. Re-add native sources + classes
+# when NLC / Vegmap are reinstated.
 #
 # Single source of truth: each class lists its ``members`` (canonical scientific
-# binomials, plus hybrid spellings/synonyms that GBIF backbone resolution may
-# return).  ``genus_fallback: true`` on a class means a species whose first word
-# matches ``genus`` (and which doesn't hit any explicit binomial) collapses
-# into that class — used only for pinus_spp + eucalyptus_spp where any species
-# in the genus is treated equivalently for Phase 0.
+# binomials, plus hybrid spellings/synonyms GBIF backbone resolution may return).
+# ``genus_fallback: true`` collapses any species in ``genus`` into that class —
+# used for pinus_spp + eucalyptus_spp.
 # ----------------------------------------------------------------------------
 
 nodata: 255
@@ -21,9 +22,9 @@ nodata: 255
 # ----------------------------------------------------------------------------
 class_maps:
 
-  # 12-class schema for the upper-Berg Phase 0 inference run.
-  # Design: A. cyclops merged into A. saligna (class 1); three riparian IAPs
-  # collapsed into class 7 (data-poor individually; share riparian habitat).
+  # 8-class IAP schema for the upper-Berg Phase 0 run.
+  # A. cyclops merged into A. saligna (class 1); three riparian IAPs collapsed
+  # into class 7 (data-poor individually; share riparian habitat).
   upper_berg_12:
     0:
       name: acacia_mearnsii
@@ -85,196 +86,15 @@ class_maps:
         - "Populus alba"
         - "Populus canescens"
         - "Sesbania punicea"
-    # Classes 8–11 are populated by non-species sources.  ``source:`` tells
-    # the audit which resolver to use (vegmap biome|bioregion, or NLC
-    # class_crosswalk) instead of treating them as members[]-driven and
-    # warning on the empty list.
-    8:
-      name: fynbos
-      group: native
-      weight_base: 0.8
-      source: vegmap_or_nlc       # vegmap polygons + NLC fynbos pixels
-      members: []
-    9:
-      name: renosterveld
-      group: native
-      weight_base: 0.8
-      source: vegmap              # vegmap bioregion override only
-      members: []
-    10:
-      name: indigenous_forest
-      group: native
-      weight_base: 0.9
-      source: vegmap_or_nlc
-      members: []
-    11:
-      name: other_landcover
-      group: landcover
-      weight_base: 0.7
-      source: nlc                 # NLC cultivated/water/wetlands/barren/built/mines bucket
-      members: []
-
-  # WC-wide full NEMBA AIS plant list — stub; designed in Stage 7 training config.
-  # One class per NEMBA-listed taxon group; index = gbif_usage_key rank order.
-  # Populated by: cmrv labels-nemba-resolve + training config builder (Stage 7).
-  wc_nemba_full: {}   # STUB — filled during Stage 7
-
-# ----------------------------------------------------------------------------
-# SA-specific vernacular → canonical scientific name.
-# Currently DORMANT — applied to GBIF download taxa list before backbone
-# resolution.  All current taxa enter as scientific binomials, so no key fires.
-# Keep for the future case of a source that emits raw vernaculars.
-# Reactivates automatically once a class member name appears as a key here.
-# ----------------------------------------------------------------------------
-vernacular_map:
-  "rooikrans":             "Acacia cyclops"
-  "port jackson willow":   "Acacia saligna"
-  "port jackson":          "Acacia saligna"
-  "long-leaved wattle":    "Acacia longifolia"
-  "long leaved wattle":    "Acacia longifolia"
-  "black wattle":          "Acacia mearnsii"
-  "blackwood":             "Acacia melanoxylon"
-  "silky hakea":           "Hakea sericea"
-  "red sesbania":          "Sesbania punicea"
-  "australian myrtle":     "Leptospermum laevigatum"
-  "grey poplar":           "Populus × canescens"
-  "monterey pine":         "Pinus radiata"
-  "cluster pine":          "Pinus pinaster"
-  "maritime pine":         "Pinus pinaster"
-  "river red gum":         "Eucalyptus camaldulensis"
-  "blue gum":              "Eucalyptus globulus"
-  "sugar gum":             "Eucalyptus cladocalyx"
-  "spider gum":            "Eucalyptus lehmannii"
-
-# Rejection list — native look-alikes that must NOT leak into IAP classes.
-# Filters GBIF records at parse time.
-taxa_rejection:
-  - "Acacia karroo"     # native sweet-thorn (vs A. mearnsii)
-  - "Acacia erioloba"   # native camel-thorn
-  - "Sesbania sesban"   # native — DO NOT confuse with invasive S. punicea
-  - "Acacia sp."        # ambiguous genus-level ID — drop
-  - "Hakea sp."         # ambiguous genus-level ID — drop
-  - "Pinus sp."         # ambiguous genus-level ID — drop
-  - "Eucalyptus sp."    # ambiguous genus-level ID — drop
-
-# ----------------------------------------------------------------------------
-# NLC 2022 crosswalk — South African National Land Cover (GTI/DFFE).
-# Verified against SA_NLC_2022_ALBERS.tif.vat.dbf (2026-04-20).
-# NLC 2022 has 73 classes (values 1–73). Groups below use actual VAT values.
-# ----------------------------------------------------------------------------
-nlc_2022:
-  raster: data/landuse/SA_NLC_2022_ALBERS/SA_NLC_2022_ALBERS.tif
-  crs: EPSG:9221   # Albers SA
-  class_groups:
-    # VAT values verified 2026-04-20
-    indigenous_forest:   [1, 2, 3, 4]          # contiguous forest, low forest & thicket, dense woodland, open woodland
-    plantations:         [5, 6, 7]             # contiguous/sparse/clear-felled plantation forest
-    shrubland_fynbos:    [9]                   # "low shrubland (fynbos)"
-    shrubland_other:     [8]                   # "low shrubland (other)" — vegmap stratifies into renosterveld
-    shrubland_karoo:     [10, 11]              # succulent karoo + nama karoo — not mapped to training class
-    grassland:           [12, 13]              # sparsely wooded grassland + natural grassland
-    water:               [14, 15, 16, 17, 18, 19, 20, 21]  # rivers, estuaries, ocean, lakes, pans, dams, sewage, mine pits
-    wetlands:            [22, 23, 24]          # herbaceous wetlands (current + previous) + mangrove
-    barren:              [25, 26, 27, 28, 29, 30, 31]  # rock, dry pans, eroded, dunes, sand, riverbeds, other bare
-    cultivated:          [32, 33, 34, 35, 36, 37, 38, 39, 40, 41]  # orchards, vines, sugarcane, pineapple, annual crops, subsistence
-    fallow:              [42, 43, 44, 45, 46, 73]  # fallow/old fields (trees, bush, grass, bare, low shrub, wetlands)
-    built_up:            [47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67]
-    mines:               [68, 69, 70, 71, 72]  # surface infra, extraction pits, salt, tailings, landfills
-  class_crosswalk:
-    10: [indigenous_forest]                     # class 10 = indigenous_forest
-    8:  [shrubland_fynbos]                      # class 8  = fynbos (NLC value 9)
-    # class 9 (renosterveld) — handled in code: shrubland_other (NLC 8) + vegmap mask
-    11: [cultivated, fallow, water, wetlands, barren, built_up, mines]  # class 11 = other_landcover
-  exclusions:
-    - plantations   # spectrally ambiguous with IAP — partner data drives pine/euc/wattle
-  weight: 0.8
-
-# ----------------------------------------------------------------------------
-# Vegmap 2024 (SANBI NVM2024 — IEM5 edition) — native vegetation types.
-# Used to distinguish fynbos vs renosterveld inside NLC shrubland buckets.
-# ----------------------------------------------------------------------------
-vegmap_2024:
-  vector: data/vegmap/NVM2024final_Shapefile/NVM2024Final_IEM5_12_07012025.shp
-  # Verified fields (2026-04-17): T_BIOME, T_BIOREGIO, T_Name
-  field_biome: T_BIOME
-  field_bioregion: T_BIOREGIO
-  field_vegtype: T_Name
-  # NVM2024 biome labels are singular nouns with no "Biome" suffix
-  biome_to_class:
-    "Fynbos":    8
-    "Forests":   10
-  # Renosterveld lives inside the Fynbos biome — resolve via BIOREGION override.
-  # Bioregion match takes precedence over biome when both hit.
-  bioregion_to_class:
-    "West Coast Renosterveld Bioregion":       9
-    "East Coast Renosterveld Bioregion":       9
-    "Karoo Renosterveld Bioregion":            9
-    # Mixed bioregions — code uses vegtype_pattern below to separate
-    "Western Fynbos-Renosterveld Bioregion":   9
-    "Eastern Fynbos-Renosterveld Bioregion":   9
-  # For mixed bioregions: only polygons whose T_Name matches this pattern → class 9
-  vegtype_renosterveld_pattern: "Renosterveld"
-  # Bioregions that do NOT override biome (treat as plain fynbos)
-  bioregion_passthrough:
-    - "Southwest Fynbos Bioregion"
-    - "Northwest Fynbos Bioregion"
-    - "Zonal & Intrazonal Forests"
-  weight: 0.8
-
-# ----------------------------------------------------------------------------
-# NFEPA rivers + wetlands — freshwater ecosystem polygons.
-# Used for: (a) "other_landcover" water class support, (b) riparian mask
-# that UPWEIGHTS riparian-invasive species (class 7: Populus, Sesbania,
-# Leptospermum) and A. melanoxylon.
-# ----------------------------------------------------------------------------
-nfepa:
-  rivers: data/river_wetlands/NFEPA_rivers/NFEPA_Rivers.shp
-  wetlands: data/river_wetlands/NFEPA_wetlands/NFEPA_Wetlands.shp
-  riparian_buffer_m: 30       # buffer rivers for "riparian zone" mask
-  # Not a class source directly — emits a mask used by fuse.py to bias
-  # weak-evidence IAP points toward riparian species.
-  class_water: 11
-  weight: 0.7
 
 # ----------------------------------------------------------------------------
 # BioSCape VegPlots (Berg + Eerste, 2022–2023) — field plots.
-# HIGH-QUALITY GROUND TRUTH. 180 sites with GPS + date + species cover %.
-# Use as: held-out evaluation set, NOT training set.
+# HIGH-QUALITY GROUND TRUTH. GPS + date + species cover %.
+# IAP membership decided from class_maps.<name>.members[].
 # ----------------------------------------------------------------------------
 bioscape_vegplots:
   site_csv: data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_SiteData.csv
   plot_cover_csv: data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_PlotCoverage.csv
   line_intercept_csv: data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_LineIntercept.csv
-  plot_boundaries_kml:
-    - data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_vegplotboundaries_2022.kml
-    - data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_vegplotboundaries_2023.kml
-  site_filter: "berg"           # drop eerste_ prefix — outside AOI
   dominant_cover_min: 40        # species with cover ≥40% promoted to plot label
-  split: held_out_eval
   weight: 0.95                  # highest — field-expert identified
-
-# ----------------------------------------------------------------------------
-# GBIF — occurrence points for the IAP species in the active class_map.
-# Pulled via GBIF Download API (Darwin Core Archive).  The taxa list is
-# DERIVED FROM ``class_maps.<name>.members[]`` at runtime — do not duplicate
-# species names here.  Switch class_map via the CLI ``--class-map`` flag.
-# ----------------------------------------------------------------------------
-gbif:
-  output: data/labels/gbif_iap_berg.parquet
-  aoi: gs://ism-data/aoi/berg_upper.parquet
-  aoi_buffer_km: 5              # catch edge observations
-  date_range: ["2018-01-01", null]   # 2018+ aligns with Sentinel-2 operational era
-  basis_of_record: [HUMAN_OBSERVATION, MACHINE_OBSERVATION, PRESERVED_SPECIMEN]
-  coordinate_uncertainty_max_m: 500   # was 100; relaxed after Eucalyptus returned 0 records
-  point_buffer_m: 10            # 4 pixels at 2.5 m
-  weight: 0.5                   # tier 7 — weak points, unconfirmed
-
-# ----------------------------------------------------------------------------
-# Output — the partitioned label parquet that fuse.py writes.
-# ----------------------------------------------------------------------------
-output:
-  # GeoParquet of all point/polygon label observations (pre-rasterization)
-  observations: gs://ism-data/labels/observations.parquet
-  # Per-tile rasterized sparse label COGs (post-fusion, at 2.5 m)
-  raster_prefix: gs://ism-data/labels
-  raster_path_fmt: "gs://ism-data/labels/tile_id={tile_id}/label.tif"

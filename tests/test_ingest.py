@@ -10,6 +10,7 @@ import pytest
 import rasterio
 import xarray as xr
 
+from cmrv.ingest.chips import _window_medians
 from cmrv.ingest.cloud_mask import BAD_SCL, apply_scl_mask
 from cmrv.ingest.composite import monthly_median, write_composite_cog
 
@@ -194,3 +195,37 @@ class TestWriteCompositeCog:
             write_composite_cog(composite, out)
             with rasterio.open(out) as src:
                 assert src.count == 1
+
+
+# ---------------------------------------------------------------------------
+# _window_medians  (per-label window compute — only kept pixels materialised)
+# ---------------------------------------------------------------------------
+
+
+def _make_stack(T: int = 2, B: int = 2, H: int = 8, W: int = 8, fill: float = 1.0) -> xr.DataArray:
+    """Synthetic (time, band, y, x) stack with UTM-like x/y coords."""
+    arr = np.full((T, B, H, W), fill, dtype="float32")
+    y = np.linspace(6_240_000.0, 6_240_000.0 - (H - 1) * 10.0, H)
+    x = np.linspace(230_000.0, 230_000.0 + (W - 1) * 10.0, W)
+    return xr.DataArray(arr, dims=["time", "band", "y", "x"], coords={"y": y, "x": x})
+
+
+class TestWindowMedians:
+    def test_in_bounds_window_median(self) -> None:
+        stack = _make_stack(fill=2.0)
+        cx, cy = float(stack.x.values[4]), float(stack.y.values[4])
+        (result,) = _window_medians(stack, [(cx, cy)], chip_px=4)
+        arr, _tf, valid_frac = result
+        assert arr.shape == (2, 4, 4)
+        assert valid_frac == pytest.approx(1.0)
+        assert np.allclose(arr, 2.0)
+
+    def test_out_of_bounds_rejected(self) -> None:
+        stack = _make_stack()
+        cx, cy = float(stack.x.values[0]), float(stack.y.values[0])  # corner → window off-edge
+        assert _window_medians(stack, [(cx, cy)], chip_px=4)[0] == "oob"
+
+    def test_low_valid_frac_rejected(self) -> None:
+        stack = _make_stack(fill=np.nan)  # all-NaN window → valid_frac 0
+        cx, cy = float(stack.x.values[4]), float(stack.y.values[4])
+        assert _window_medians(stack, [(cx, cy)], chip_px=4)[0].startswith("low_valid_frac")

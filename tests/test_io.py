@@ -18,7 +18,7 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "configs" / "labels_schema.y
 def test_load_config_reads_yaml() -> None:
     cfg = load_config(str(SCHEMA_PATH))
     assert isinstance(cfg, dict)
-    assert "species_map" in cfg or "gbif" in cfg
+    assert "class_maps" in cfg
 
 
 def test_list_parquet_files_finds_files(tmp_path: Path) -> None:

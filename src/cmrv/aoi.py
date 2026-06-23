@@ -1,4 +1,4 @@
-"""AOI utilities: DWS quaternary/tertiary catchments + SA provincial boundaries + tile grid."""
+"""AOI utilities: Western Cape province boundary + tile grid (scales to SA later)."""
 
 from __future__ import annotations
 
@@ -10,44 +10,10 @@ from loguru import logger
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-DWS_QUATERNARY_SHP = Path("data/aoi/SA_Catchm_Quaternary.shp")
 SA_PROVINCIAL_SHP = Path("data/aoi/SA_Provincial_bnd_dd.shp")
-
-BERG_UPPER_CODES: tuple[str, ...] = ("G10A", "G10B", "G10C")
-BERG_CATCHMENT_BBOX_WGS84: tuple[float, float, float, float] = (18.5, -34.1, 19.5, -33.0)
 
 WC_PROVINCE_NAME = "Western Cape"
 WC_BUFFER_M = 1_000.0
-
-
-def select_quaternaries_from_file(
-    source: str | Path = DWS_QUATERNARY_SHP,
-    codes: list[str] | tuple[str, ...] | None = BERG_UPPER_CODES,
-    field: str = "QUATERNARY",
-    out_crs: str = "EPSG:4326",
-) -> gpd.GeoDataFrame:
-    """Read the DWS quaternary catchment layer and optionally filter by code.
-
-    The national shapefile is from waterresourceswr2012.co.za (free registration
-    required).  If ``codes`` is None the whole layer is returned.
-    """
-    from cmrv.io import read_gdf
-
-    logger.info("loading quaternary layer from {}", source)
-    gdf = read_gdf(str(source))
-    if codes is not None:
-        if field not in gdf.columns:
-            raise KeyError(
-                f"Field '{field}' not in columns {list(gdf.columns)}. Pass --field to override."
-            )
-        codes_set = set(codes)
-        gdf = gdf[gdf[field].isin(codes_set)].reset_index(drop=True)
-        missing = codes_set - set(gdf[field].unique())
-        if missing:
-            raise ValueError(f"No features found for codes: {sorted(missing)}")
-    if gdf.crs is None:
-        raise ValueError(f"Source {source} has no CRS declared; refusing to assume one.")
-    return gdf.to_crs(out_crs)
 
 
 def fetch_western_cape(

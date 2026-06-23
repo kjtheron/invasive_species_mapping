@@ -1,8 +1,8 @@
-"""Merge + filter helpers for the WC NEMBA observation store.
+"""Merge + filter helpers for the WC observation store.
 
 ``merge_partitions``
-    Union all source partitions in the store, deduplicate on ``obs_id``
-    (keeping max ``ingested_at``), write ``summary.parquet``.
+    Union all source partitions, deduplicate on ``obs_id`` (keeping max
+    ``ingested_at``), write ``summary.parquet``.
 
 ``load_training_labels``
     Spatial + species filter over the merged store — the single entry-point
@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import duckdb
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
@@ -23,9 +22,14 @@ from cmrv.io import read_gdf
 from cmrv.labels.observations import WC_LABELS_ROOT, read_all, write_summary
 
 
+def _dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep one row per obs_id — the latest by ingested_at."""
+    return df.sort_values("ingested_at").drop_duplicates("obs_id", keep="last")
+
+
 def merge_partitions(
     root: str = WC_LABELS_ROOT,
-    summary_uri: str = "gs://ism-data/labels/wc/summary.parquet",
+    summary_uri: str = "data/labels/wc/summary.parquet",
 ) -> pd.DataFrame:
     """Union all source partitions, deduplicate on obs_id, write summary.
 
@@ -33,20 +37,12 @@ def merge_partitions(
     fraction with non-null coord_uncertainty_m).
     """
     table = read_all(root)
-    con = duckdb.connect()
-    con.register("_obs", table)
-    n_raw = con.execute("SELECT COUNT(*) FROM _obs").fetchone()[0]
-    n_deduped = con.execute("""
-        SELECT COUNT(*) FROM (
-            SELECT * FROM _obs
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY obs_id ORDER BY ingested_at DESC) = 1
-        )
-    """).fetchone()[0]
+    n_deduped = len(_dedup_latest(table))
     logger.info(
         "merge_partitions: {} raw rows → {} after dedup (dropped {})",
-        n_raw,
+        len(table),
         n_deduped,
-        n_raw - n_deduped,
+        len(table) - n_deduped,
     )
     return write_summary(root=root, out_uri=summary_uri)
 
@@ -59,98 +55,59 @@ def load_training_labels(
     max_coord_uncertainty_m: float | None = 500.0,
     date_min: str | None = "2018-01-01",
     date_max: str | None = None,
-    nemba_categories: list[str] | None = None,
     geom_types: list[str] | None = None,
     min_weight: float | None = None,
+    min_cover_pct: float | None = None,
     root: str = WC_LABELS_ROOT,
 ) -> gpd.GeoDataFrame:
     """Load training labels filtered to an AOI and optional species subset.
 
-    Parameters
-    ----------
-    aoi_uri:
-        Path to an AOI GeoParquet (local or gs://). All returned observations
-        lie within this polygon.
-    species_subset:
-        List of GBIF usage_keys (int) or scientific name fragments (str).
-        If None, return all species (including nemba_category=None rows).
-    sources:
-        Restrict to these source values (e.g. ["gbif", "bioscape_line"]).
-    min/max_coord_uncertainty_m:
-        Filter on coord_uncertainty_m. Null values are kept unless
-        ``min_coord_uncertainty_m`` is set.
-    date_min:
-        ISO date string; keep only rows where event_date ≥ date_min.
-    nemba_categories:
-        Filter on nemba_category (e.g. ["1a", "1b"]).
-    geom_types:
-        Filter on geom_type (e.g. ["point"]).
-    min_weight:
-        Drop rows with weight < min_weight.
+    Filters: source, geom_type, weight, event_date range, coord_uncertainty
+    range (nulls kept), cover, and species (GBIF usage_key ints or
+    scientific-name substrings). Deduplicates on obs_id (latest ingested_at),
+    then clips to the AOI polygon.
 
-    Returns
-    -------
-    geopandas.GeoDataFrame with WKB geometry deserialized to shapely, CRS=EPSG:4326.
+    ``min_cover_pct`` is the **pure-pixel gate** — keep only rows whose measured
+    ``cover_pct`` ≥ threshold (drops null-cover rows). Off by default; enable
+    (~60) once cover-bearing data is in the store.
+
+    Returns a GeoDataFrame with WKB geometry deserialized to shapely, EPSG:4326.
     """
-    table = read_all(root)
-    con = duckdb.connect()
-    con.register("_obs", table)
-
-    conditions: list[str] = []
+    df = _dedup_latest(read_all(root))
+    mask = pd.Series(True, index=df.index)
 
     if sources:
-        quoted = ", ".join(f"'{s}'" for s in sources)
-        conditions.append(f"source IN ({quoted})")
-
-    if nemba_categories:
-        quoted = ", ".join(f"'{c}'" for c in nemba_categories)
-        conditions.append(f"nemba_category IN ({quoted})")
-
+        mask &= df["source"].isin(sources)
     if geom_types:
-        quoted = ", ".join(f"'{g}'" for g in geom_types)
-        conditions.append(f"geom_type IN ({quoted})")
-
+        mask &= df["geom_type"].isin(geom_types)
     if min_weight is not None:
-        conditions.append(f"weight >= {min_weight}")
+        mask &= df["weight"] >= min_weight
+    if min_cover_pct is not None:
+        mask &= df["cover_pct"].notna() & (df["cover_pct"] >= min_cover_pct)
 
+    ed = pd.to_datetime(df["event_date"], errors="coerce")
     if date_min:
-        conditions.append(f"(event_date IS NULL OR event_date >= DATE '{date_min}')")
-
+        mask &= ed.isna() | (ed >= pd.Timestamp(date_min))
     if date_max:
-        conditions.append(f"event_date <= DATE '{date_max}'")
+        mask &= ed <= pd.Timestamp(date_max)
 
+    coord = df["coord_uncertainty_m"]
     if max_coord_uncertainty_m is not None:
-        conditions.append(
-            f"(coord_uncertainty_m IS NULL OR coord_uncertainty_m <= {max_coord_uncertainty_m})"
-        )
-
+        mask &= coord.isna() | (coord <= max_coord_uncertainty_m)
     if min_coord_uncertainty_m is not None:
-        conditions.append(
-            f"(coord_uncertainty_m IS NULL OR coord_uncertainty_m >= {min_coord_uncertainty_m})"
-        )
+        mask &= coord.isna() | (coord >= min_coord_uncertainty_m)
 
     if species_subset:
         int_keys = [s for s in species_subset if isinstance(s, int)]
         str_frags = [s for s in species_subset if isinstance(s, str)]
-        sp_parts: list[str] = []
+        sp = pd.Series(False, index=df.index)
         if int_keys:
-            sp_parts.append(f"gbif_usage_key IN ({', '.join(str(k) for k in int_keys)})")
+            sp |= df["gbif_usage_key"].isin(int_keys)
         for frag in str_frags:
-            escaped = frag.replace("'", "''")
-            sp_parts.append(f"species_normalized LIKE '%{escaped}%'")
-        if sp_parts:
-            conditions.append(f"({' OR '.join(sp_parts)})")
+            sp |= df["species_normalized"].str.contains(frag, regex=False, na=False)
+        mask &= sp
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    df: pd.DataFrame = con.execute(f"""
-        WITH deduped AS (
-            SELECT * FROM _obs
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY obs_id ORDER BY ingested_at DESC) = 1
-        )
-        SELECT * FROM deduped {where}
-    """).df()
-
+    df = df[mask]
     logger.info("load_training_labels: {} rows after filters", len(df))
 
     geometries = [from_wkb(bytes(b)) if b is not None else None for b in df["geometry"].tolist()]

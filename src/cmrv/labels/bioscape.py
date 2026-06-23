@@ -16,8 +16,8 @@ Two emitters (distinct ``source`` values in the unified store):
 Both loaders:
 - Emit the unified ``observations.SCHEMA`` via ``write_source_partition``.
 - Do NOT assign class_id (training config does that via labels_schema.yaml).
-- Cross-reference species against ``nemba_taxa_resolved.parquet`` for
-  nemba_category and gbif_usage_key.
+- Decide IAP membership from the active class-map ``members[]`` (single source
+  of truth in ``configs/labels_schema.yaml``) — no separate NEMBA taxa file.
 - Filter to WC (both berg and eerste SiteCodes are within Western Cape —
   the old ``SiteCode == 'berg'`` filter is dropped).
 
@@ -38,8 +38,11 @@ from loguru import logger
 from pyproj import Geod
 from shapely.geometry import Point
 
-from cmrv.io import read_parquet_df
+from cmrv.labels.classmap import ClassMap, build_lookup
 from cmrv.labels.observations import WC_LABELS_ROOT, make_run_id, write_source_partition
+
+DEFAULT_SCHEMA_PATH = "configs/labels_schema.yaml"
+DEFAULT_CLASS_MAP = "upper_berg_12"
 
 # ---------------------------------------------------------------------------
 # Data file paths (ORNL DAAC archive layout)
@@ -105,42 +108,16 @@ def _offset_point(lon: float, lat: float, az_deg: float, dist_m: float) -> tuple
     return float(lon2), float(lat2)
 
 
-def _load_nemba_lookup(
-    nemba_resolved: str | Path,
-) -> dict[str, tuple[int | None, str | None]]:
-    """Return {binomial_lower: (gbif_usage_key, nemba_category)} from resolved parquet."""
-    df = read_parquet_df(str(nemba_resolved))
-    out: dict[str, tuple[int | None, str | None]] = {}
-    for rec in df.to_dict("records"):
-        cat = rec.get("nemba_category")
-        key = rec.get("gbif_usage_key")
-        qn = str(rec.get("query_name") or "").lower().strip()
-        if qn:
-            out[qn] = (key, cat)
-        canon = str(rec.get("canonical_name") or "")
-        parts = canon.split()
-        if len(parts) >= 2:
-            binomial = f"{parts[0]} {parts[1]}".lower()
-            out.setdefault(binomial, (key, cat))
-    return out
+def _is_iap(species: str | None, classmap: ClassMap) -> bool:
+    """True if *species* resolves to an IAP class in the active class-map.
 
-
-def _lookup_species(
-    species: str | None,
-    nemba_map: dict[str, tuple[int | None, str | None]],
-) -> tuple[int | None, str | None]:
-    """Resolve AcceptedSpecies → (gbif_usage_key, nemba_category) or (None, None)."""
-    if not species:
-        return None, None
+    Membership comes from ``class_maps.<name>.members[]`` (single source of
+    truth) — exact binomial first, then per-class genus fallback.
+    """
     normalized = _normalize_name(species)
     if not normalized:
-        return None, None
-    tokens = normalized.lower().split()
-    for n in (2, 1):
-        key = " ".join(tokens[:n])
-        if key in nemba_map:
-            return nemba_map[key]
-    return None, None
+        return False
+    return classmap.resolve(normalized) is not None
 
 
 def _load_site_data(site_csv: Path) -> pd.DataFrame:
@@ -156,9 +133,10 @@ def _load_site_data(site_csv: Path) -> pd.DataFrame:
 
 
 def ingest_lineintercept(
-    nemba_resolved: str | Path,
     line_csv: str | Path = LINE_CSV,
     site_csv: str | Path = SITE_CSV,
+    schema_path: str | Path = DEFAULT_SCHEMA_PATH,
+    class_map_name: str = DEFAULT_CLASS_MAP,
     root: str = WC_LABELS_ROOT,
     run_id: str | None = None,
     iap_only: bool = True,
@@ -167,18 +145,17 @@ def ingest_lineintercept(
 
     Parameters
     ----------
-    nemba_resolved:
-        Path to ``nemba_taxa_resolved.parquet`` (output of labels-nemba-resolve).
+    schema_path / class_map_name:
+        IAP membership is decided from ``class_maps.<class_map_name>.members[]``.
     iap_only:
-        If True (default) emit only NEMBA-listed species rows. Pass False to
-        also include non-IAP rows (e.g., for negative-sample construction).
+        If True (default) emit only IAP species rows. Pass False to also
+        include non-IAP rows (e.g., for negative-sample construction).
     """
     source = "bioscape_line"
     run_id = run_id or make_run_id(source)
     ingested_at = dt.datetime.now(tz=dt.UTC)
 
-    nemba_map = _load_nemba_lookup(nemba_resolved)
-    logger.info("loaded {} NEMBA entries for BioSCape line lookup", len(nemba_map))
+    classmap = build_lookup(schema_path, class_map_name)
 
     sd = _load_site_data(Path(site_csv))
     li = pd.read_csv(Path(line_csv))
@@ -194,9 +171,9 @@ def ingest_lineintercept(
     for rec in li.to_dict("records"):
         sp_raw = rec.get("AcceptedSpecies") or ""
         sp_norm = _normalize_name(sp_raw)
-        gbif_key, nemba_cat = _lookup_species(sp_raw, nemba_map)
+        is_iap = _is_iap(sp_raw, classmap)
 
-        if iap_only and nemba_cat is None:
+        if iap_only and not is_iap:
             continue
 
         transect = rec["LineTransect"]
@@ -220,16 +197,17 @@ def ingest_lineintercept(
                 "source": source,
                 "source_record_id": obs_id,
                 "source_url": None,
+                "source_doi": None,  # TODO: fill from dataset metadata
+                "license": None,  # TODO: fill from dataset metadata
                 "species": sp_raw,
                 "species_normalized": sp_norm,
-                "gbif_usage_key": gbif_key,
-                "nemba_category": nemba_cat,
+                "gbif_usage_key": None,
                 "geom_type": "point",
                 "coord_uncertainty_m": LINE_COORD_UNCERTAINTY_M,
                 "event_date": rec.get("Date"),
                 "basis_of_record": "BIOSCAPE_LINE" if sp_norm else "GROUND_COVER",
                 "cover_pct": None,
-                "weight": 0.95 if nemba_cat else 0.0,
+                "weight": 0.95 if is_iap else 0.0,
                 "ingested_at": ingested_at,
                 "ingest_run_id": run_id,
                 "aoi_admin1": "western_cape",
@@ -257,9 +235,10 @@ def ingest_lineintercept(
 
 
 def ingest_plotcoverage(
-    nemba_resolved: str | Path,
     plot_csv: str | Path = PLOT_CSV,
     site_csv: str | Path = SITE_CSV,
+    schema_path: str | Path = DEFAULT_SCHEMA_PATH,
+    class_map_name: str = DEFAULT_CLASS_MAP,
     root: str = WC_LABELS_ROOT,
     run_id: str | None = None,
     iap_only: bool = True,
@@ -268,14 +247,14 @@ def ingest_plotcoverage(
 
     Geometry is the quadrant centroid: plot center + 2.5 m along the quadrant
     bisector azimuth (NE→45°, NW→315°, SE→135°, SW→225°).
-    Weight = 0.95 when sum(NEMBA PercentCoverAlive) ≥ 40; 0.5 otherwise.
+    Weight = 0.95 when sum(IAP PercentCoverAlive) ≥ 40; 0.5 otherwise.
+    IAP membership comes from ``class_maps.<class_map_name>.members[]``.
     """
     source = "bioscape_plot"
     run_id = run_id or make_run_id(source)
     ingested_at = dt.datetime.now(tz=dt.UTC)
 
-    nemba_map = _load_nemba_lookup(nemba_resolved)
-    logger.info("loaded {} NEMBA entries for BioSCape plot lookup", len(nemba_map))
+    classmap = build_lookup(schema_path, class_map_name)
 
     sd = _load_site_data(Path(site_csv))
     pc = pd.read_csv(Path(plot_csv))
@@ -296,16 +275,9 @@ def ingest_plotcoverage(
     pc = pc.merge(site_cols, on="SiteCode_Plot_Quadrant", how="inner")
 
     # Compute per-quadrant IAP cover total for weight assignment
-    def is_nemba(sp: str | None) -> bool:
-        norm = _normalize_name(sp)
-        if not norm:
-            return False
-        tokens = norm.lower().split()
-        return (" ".join(tokens[:2]) in nemba_map) or (" ".join(tokens[:1]) in nemba_map)
-
-    pc["is_nemba"] = pc["AcceptedSpecies"].apply(is_nemba)
+    pc["is_iap"] = pc["AcceptedSpecies"].apply(lambda sp: _is_iap(sp, classmap))
     quad_iap_cover = (
-        pc[pc["is_nemba"]]
+        pc[pc["is_iap"]]
         .groupby("SiteCode_Plot_Quadrant")["PercentCoverAlive"]
         .sum()
         .reset_index()
@@ -317,9 +289,8 @@ def ingest_plotcoverage(
     for rec in pc.to_dict("records"):
         sp_raw = rec.get("AcceptedSpecies") or ""
         sp_norm = _normalize_name(sp_raw)
-        gbif_key, nemba_cat = _lookup_species(sp_raw, nemba_map)
 
-        if iap_only and nemba_cat is None:
+        if iap_only and not _is_iap(sp_raw, classmap):
             continue
 
         quadrant = rec.get("Quadrant") or "NE"
@@ -343,10 +314,11 @@ def ingest_plotcoverage(
                 "source": source,
                 "source_record_id": obs_id,
                 "source_url": None,
+                "source_doi": None,  # TODO: fill from dataset metadata
+                "license": None,  # TODO: fill from dataset metadata
                 "species": sp_raw,
                 "species_normalized": sp_norm,
-                "gbif_usage_key": gbif_key,
-                "nemba_category": nemba_cat,
+                "gbif_usage_key": None,
                 "geom_type": "point",
                 "coord_uncertainty_m": PLOT_COORD_UNCERTAINTY_M,
                 "event_date": rec.get("Date"),

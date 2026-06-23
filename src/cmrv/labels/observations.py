@@ -1,40 +1,29 @@
-"""Unified observation schema for the WC NEMBA occurrence store.
+"""Unified observation schema for the WC occurrence store.
 
-Canonical store: ``gs://ism-data/labels/wc/obs/source=<source>/`` — partitioned
-Parquet, deduped on ``obs_id``. See roadmap §1.5 for why every row carries
-``obs_id``, ``source``, ``coord_uncertainty_m``, and ``ingested_at``.
+Canonical store: ``data/labels/wc/obs/source=<source>/`` — partitioned
+Parquet, deduped on ``obs_id``. Every row carries ``obs_id``, ``source``,
+``coord_uncertainty_m``, and ``ingested_at`` for traceability.
 
 ``class_id`` is deliberately **not** in this schema — training configs crosswalk
-``(gbif_usage_key, nemba_category) → class_id`` via
-``configs/labels_schema.yaml → class_maps.<name>``. Same parquet feeds
-upper-Berg-12 and WC-NEMBA-full runs.
+``species_normalized → class_id`` via
+``configs/labels_schema.yaml → class_maps.<name>`` at ``make-split`` time.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import os
 
-import duckdb
-import fsspec
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
 from shapely import to_wkb
 
-from cmrv.io import _duckdb_con, ensure_parent, list_parquet_files, write_parquet_df
+from cmrv.io import list_parquet_files, read_parquet_df, write_parquet_df
 
-WC_LABELS_ROOT = "gs://ism-data/labels/wc/obs"
+WC_LABELS_ROOT = "data/labels/wc/obs"
 COORD_UNCERTAINTY_DROP_M = 500.0
-KNOWN_SOURCES = frozenset(
-    {
-        "gbif",
-        "inat_via_gbif",
-        "bioscape_line",
-        "bioscape_plot",
-        "vegmap",
-        "nlc_sample",
-    }
-)
+KNOWN_SOURCES = frozenset({"bioscape_line", "bioscape_plot"})
 
 # Canonical column order for all partitions
 COLUMNS: tuple[str, ...] = (
@@ -42,10 +31,11 @@ COLUMNS: tuple[str, ...] = (
     "source",
     "source_record_id",
     "source_url",
+    "source_doi",
+    "license",
     "species",
     "species_normalized",
     "gbif_usage_key",
-    "nemba_category",
     "geom_type",
     "coord_uncertainty_m",
     "event_date",
@@ -117,12 +107,12 @@ def write_source_partition(
 ) -> str:
     """Atomic partition overwrite with upsert semantics.
 
-    Reads any existing partition via DuckDB, concatenates the new rows,
-    deduplicates on ``obs_id`` (keeping max ``ingested_at``), and writes
-    the result back. Re-running the same ingest is idempotent.
+    Concatenates new rows with any existing partition, deduplicates on
+    ``obs_id`` (keeping max ``ingested_at``), and writes the result back.
+    Re-running the same ingest is idempotent.
 
-    Writes to ``_tmp_<run_id>/`` first, then ``fs.mv`` into place so
-    readers never see a torn partition.
+    Writes to a ``_tmp_<run_id>/`` file first, then ``os.replace`` into place
+    so readers never see a torn partition.
     """
     if source not in KNOWN_SOURCES:
         raise ValueError(f"unknown source {source!r}")
@@ -131,67 +121,32 @@ def write_source_partition(
 
     df = gdf_to_obs_df(gdf)
     existing_files = list_parquet_files(partition_dir)
+    frames = [read_parquet_df(f) for f in existing_files]
+    n_existing = sum(len(f) for f in frames)
 
-    con = _duckdb_con(partition_dir)
-    con.register("_new", df)
+    combined = pd.concat([*frames, df], ignore_index=True)
+    merged = combined.sort_values("ingested_at").drop_duplicates("obs_id", keep="last")
 
-    if existing_files:
-        files_sql = "[" + ", ".join(f"'{f}'" for f in existing_files) + "]"
-        n_existing = con.execute(f"SELECT COUNT(*) FROM read_parquet({files_sql})").fetchone()[0]
-        logger.info(
-            "reading {} existing row(s) from {} file(s) for source={}",
-            n_existing,
-            len(existing_files),
-            source,
-        )
-        combined_sql = f"SELECT * FROM read_parquet({files_sql}) UNION ALL SELECT * FROM _new"
-    else:
-        n_existing = 0
-        combined_sql = "SELECT * FROM _new"
-
-    tmp_dir = f"{partition_dir}/_tmp_{run_id}"
+    tmp_file = f"{partition_dir}/_tmp_{run_id}/part-{run_id}.parquet"
     final_file = f"{partition_dir}/part-{run_id}.parquet"
-    tmp_file = f"{tmp_dir}/part-{run_id}.parquet"
+    write_parquet_df(merged, tmp_file)
 
-    fs, _ = fsspec.core.url_to_fs(partition_dir)
-    _, tmp_path = fsspec.core.url_to_fs(tmp_dir)
-    if fs.exists(tmp_path):
-        fs.rm(tmp_path, recursive=True)
-
-    ensure_parent(tmp_file)  # creates tmp_dir on local filesystem (no-op for gs://)
-
-    con.execute(f"""
-        COPY (
-            WITH combined AS ({combined_sql})
-            SELECT * FROM combined
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY obs_id ORDER BY ingested_at DESC) = 1
-        ) TO '{tmp_file}' (FORMAT PARQUET, COMPRESSION ZSTD)
-    """)
-
-    n_out = con.execute(f"SELECT COUNT(*) FROM read_parquet('{tmp_file}')").fetchone()[0]
     logger.info(
         "source={} new={} existing={} merged={} (dedupe kept {})",
         source,
         len(df),
         n_existing,
         n_existing + len(df),
-        n_out,
+        len(merged),
     )
 
     # Atomic promote: remove prior partition files then move the new one in.
     for old_file in existing_files:
-        fs.rm(old_file)
-    _, final_path = fsspec.core.url_to_fs(final_file)
-    _, tmp_file_path = fsspec.core.url_to_fs(tmp_file)
-    fs.mv(tmp_file_path, final_path)
-    fs.rm(tmp_path, recursive=True)
+        os.remove(old_file)
+    os.replace(tmp_file, final_file)
+    os.rmdir(f"{partition_dir}/_tmp_{run_id}")
 
-    logger.success(
-        "wrote source={} → {} ({} rows after upsert)",
-        source,
-        final_file,
-        n_out,
-    )
+    logger.success("wrote source={} → {} ({} rows after upsert)", source, final_file, len(merged))
     return final_file
 
 
@@ -204,36 +159,31 @@ def read_all(root: str = WC_LABELS_ROOT) -> pd.DataFrame:
     files = list_parquet_files(root, recursive=True)
     if not files:
         raise FileNotFoundError(f"no parquet files under {root}")
-    con = _duckdb_con(root)
-    files_sql = "[" + ", ".join(f"'{f}'" for f in files) + "]"
-    return con.execute(f"SELECT * FROM read_parquet({files_sql})").df()
+    return pd.concat([read_parquet_df(f) for f in files], ignore_index=True)
 
 
 def summary(root: str = WC_LABELS_ROOT) -> pd.DataFrame:
-    """Per-source × per-category counts + fraction with non-null coord_uncertainty_m."""
+    """Per-source counts + fraction with non-null coord_uncertainty_m / cover_pct."""
     tbl = read_all(root)
-    con = duckdb.connect()
-    con.register("_tbl", tbl)
-    return con.execute("""
-        SELECT
-            source,
-            nemba_category,
-            COUNT(*) AS n,
-            SUM(CASE WHEN coord_uncertainty_m IS NOT NULL THEN 1 ELSE 0 END)
-                AS n_with_coord_unc,
-            ROUND(
-                AVG(CASE WHEN coord_uncertainty_m IS NOT NULL THEN 1.0 ELSE 0.0 END) * 100,
-                2
-            ) AS pct_with_coord_unc
-        FROM _tbl
-        GROUP BY source, nemba_category
-        ORDER BY source, nemba_category
-    """).df()
+    tbl["_has_unc"] = tbl["coord_uncertainty_m"].notna()
+    tbl["_has_cover"] = tbl["cover_pct"].notna()
+    out = (
+        tbl.groupby("source", dropna=False)
+        .agg(
+            n=("obs_id", "size"),
+            n_with_coord_unc=("_has_unc", "sum"),
+            n_with_cover=("_has_cover", "sum"),
+        )
+        .reset_index()
+    )
+    out["pct_with_coord_unc"] = (100 * out["n_with_coord_unc"] / out["n"]).round(2)
+    out["pct_with_cover"] = (100 * out["n_with_cover"] / out["n"]).round(2)
+    return out.sort_values("source").reset_index(drop=True)
 
 
 def write_summary(
     root: str = WC_LABELS_ROOT,
-    out_uri: str = "gs://ism-data/labels/wc/summary.parquet",
+    out_uri: str = "data/labels/wc/summary.parquet",
 ) -> pd.DataFrame:
     """Compute ``summary()`` and persist as a flat Parquet for auditability."""
     df = summary(root)
