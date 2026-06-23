@@ -46,7 +46,7 @@ pc.sign_inplace(item)
 
 ## 2026-04-26 — `fuse.py` is viz-only, not a training input
 
-**Mistake:** Earlier roadmap drafts (`Phase_0_Build_Roadmap.md` §3 Stage 4, §7, line 472) assumed dense per-pixel segmentation training that consumed `label.tif` rasters via a DataLoader.  The implementation pivoted to a chip / point regime (`ingest-chips` → 64×64 chips per obs_id × 4 months → `make-split` → embedding-patch lookup at obs coordinate) but the docstrings, justfile recipe, and audit code didn't say so.  Running `labels-fuse` looked like a required step it isn't.
+**Mistake:** Earlier roadmap drafts (since removed) assumed dense per-pixel segmentation training that consumed `label.tif` rasters via a DataLoader.  The implementation pivoted to a chip / point regime (`ingest-chips` → 64×64 chips per obs_id × 4 months → `make-split` → embedding-patch lookup at obs coordinate) but the docstrings, justfile recipe, and audit code didn't say so.  Running `labels-fuse` looked like a required step it isn't.
 
 **Rule:** `cmrv labels-fuse` produces sparse label COGs for **visualization only** (QGIS / Streamlit overlays).  Training consumes the unified observation store directly via `cmrv.labels.classmap.build_lookup`, not via raster pixel values.  When auditing label coverage for an actual training run, use `cmrv labels-audit-classmap --stage pre` (no fuse needed).  The `--stage post` and `--stage both` modes only matter if you want to sanity-check the viz raster.
 

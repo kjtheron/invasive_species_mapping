@@ -1,27 +1,25 @@
 aoi:
-  path: gs://ism-data/aoi/berg_upper.parquet
-  # codes: [G10A, G10B, G10C]  # DWS quaternary codes for upper Berg River
+  path: data/aoi/western_cape.parquet
   crs_utm: EPSG:32734  # UTM 34S — true-area work for tile grid
   tile_km: 10
 
-# Months chosen to capture seasonal phenology of IAPs vs natives.
+# Three phenology-tuned months for the WESTERN CAPE (winter-rainfall
+# Mediterranean — NOT the summer-rainfall calendar of most SA literature):
+#   • feb — peak dry-summer trough: evergreen Pinus/Eucalyptus/Hakea stand out
+#           against the senesced fynbos/herbaceous matrix.
+#   • may — autumn transition (non-flowering baseline; green-down).
+#   • sep — spring green-up + Acacia flowering (yellow bloom = wattle-specific).
+# Red-edge bands (B05–B07, B8A) carry most of the discriminatory signal.
 #
-# IMPORTANT — YYYY semantics differ by consumer:
-#   • `cmrv ingest-month`  → uses these dates literally (target year 2023 for
-#                            max label overlap with GBIF, BioSCape VegPlots,
-#                            and BioSCape AVIRIS Oct–Nov 2023 flights).
-#   • `cmrv ingest-chips`  → IGNORES the year. chips.py `temporal_windows`
-#                            substitutes each label's event_date year, so all
-#                            four windows are pulled from the SAME calendar
-#                            year as the label (single-year phenology).
-#
-# Keep all four windows in the SAME calendar year (e.g. all 2023) so that
-# `ingest-month` produces a self-consistent stack.
+# YYYY semantics differ by consumer:
+#   • `cmrv ingest-month` uses these dates literally (2023 stack).
+#   • `cmrv ingest-chips` substitutes each label's event_date year, so the 3
+#     windows come from the SAME year as the label (single-year phenology).
+# The temporal head masks any month that has no cloud-free composite.
 months:
-  - {start: "2023-10-01", end: "2023-10-31", label: oct}
-  - {start: "2023-08-01", end: "2023-08-31", label: aug}
-  - {start: "2023-01-01", end: "2023-01-31", label: jan}
-  - {start: "2023-04-01", end: "2023-04-30", label: apr}
+  - {start: "2023-02-01", end: "2023-02-28", label: feb}
+  - {start: "2023-05-01", end: "2023-05-31", label: may}
+  - {start: "2023-09-01", end: "2023-09-30", label: sep}
 
 s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
 # Scene-level cloud cover cap. SCL masking handles per-pixel cloud removal,
@@ -30,11 +28,10 @@ s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
 cloud_cover_max: 95
 
 paths:
-  bucket: gs://ism-data
-  tiles: gs://ism-data/aoi/tiles.parquet
-  raw_prefix: gs://ism-data/raw
-  sr_prefix: gs://ism-data/sr
-  labels_prefix: gs://ism-data/labels
-  embeddings_prefix: gs://ism-data/embeddings
-  runs_prefix: gs://ism-data/runs
-  outputs_prefix: gs://ism-data/outputs
+  tiles: data/aoi/tiles.parquet
+  raw_prefix: data/raw
+  sr_prefix: data/sr
+  labels_prefix: data/labels
+  embeddings_prefix: data/embeddings
+  runs_prefix: data/runs
+  outputs_prefix: data/outputs

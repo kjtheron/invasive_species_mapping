@@ -1,99 +1,125 @@
-# Project conventions — catchment-mrv Phase 0
+# Project conventions — catchment-mrv
 
-Primary source-of-truth: [Phase_0_Build_Roadmap.md](Phase_0_Build_Roadmap.md). Week-by-week plan: [tasks/todo.md](tasks/todo.md). Accumulated lessons: [tasks/lessons.md](tasks/lessons.md) (create on first correction).
+## What this is
+
+One platform sold as **verification + intelligence** through four "lenses", all
+sharing a single spine:
+
+- **Lens A — Invasive Alien Plant Intelligence** ← *Phase 0 builds this, and only this.*
+- Lens B — Rehabilitation & Closure Assurance (mining)
+- Lens C — Deforestation-Free Verification (EUDR)
+- Lens D — Biodiversity & Nature-Risk Intelligence (bioacoustics + camera traps)
+
+The spine (build once, reused by every lens): **AOI/tiling → sensor ingest &
+harmonization → foundation-model embeddings (Clay via terratorch) → light
+per-lens heads → per-pixel uncertainty + OOD verification → delivery (COGs,
+report, viewer).** Each lens is "spine + a head + a metric + a report".
+
+**Do not scope-creep into Lens B/C/D.** They are deferred. When in doubt, cut.
+
+## Phase 0 goal
+
+A 2.5 m, 4-timestep IAP species map for a Western Cape catchment (upper Berg),
+with per-pixel uncertainty and out-of-distribution novelty flags. Phase 0 is
+**IAP-species-only** — native/background classes are deferred; "not-IAP" is an
+OOD/threshold decision, not a trained class.
+
+Week-by-week plan: [tasks/todo.md](tasks/todo.md). Accumulated lessons:
+[tasks/lessons.md](tasks/lessons.md).
+
+## Local-first storage layout
+
+Phase 0 runs **locally** — no cloud bucket. All artifacts live under `data/`
+(gitignored), not `~/.cache/`:
+
+- `data/aoi/` — AOI polygons, tile grid
+- `data/raw/` — S2 L2A 10 m COGs
+- `data/sr/` — SEN2SR 2.5 m COGs
+- `data/labels/wc/obs/source=<src>/` — unified observation store (partitioned Parquet)
+- `data/chips/train/` — 64×64 training chips + `manifest.parquet`
+- `data/embeddings/` — Clay Zarr cubes
+- `data/runs/` — checkpoints, MLflow db
+- `data/outputs/` — triplet COGs, reports
 
 ## Python & packaging
 
-- **Always `uv`** — never `pip install` directly, never `conda`, never `poetry`. `uv add <pkg>` to add a dep; `uv sync` to install; `uv run <cmd>` to execute inside the venv.
-- Virtualenv lives at `.venv` (uv default) — do not commit it, do not rename it.
-- Python 3.12 pinned in `pyproject.toml`.
-- `uv.lock` is committed. Regenerate only via `uv lock --upgrade` or `uv add`.
-- Run the CLI via `uv run cmrv <stage> ...` or the `just` recipe that wraps it.
-
-## Task runner
-
-- `just` recipes in `justfile` are the canonical entry points. Prefer `just <recipe>` over ad-hoc commands so everything is reproducible.
-- `just default` = `just lint test`. Run before declaring any stage done.
-
-## Google Cloud
-
-- **Project**: `focus-vim-493513-r1`
-- **Bucket**: `gs://ism-data` (region: `northamerica-northeast1`, Montréal)
-- **Vertex AI region**: `northamerica-northeast1` — must match the bucket to avoid egress.
-- **Demo host**: Cloud Run (scales to zero).
-
-All pipeline artifacts live in GCS, not local disk. Path convention:
-- `gs://ism-data/aoi/` — AOI polygons, tile grids
-- `gs://ism-data/raw/` — S2 L2A COGs
-- `gs://ism-data/sr/` — SEN2SR 2.5 m COGs
-- `gs://ism-data/labels/` — fused label rasters + unified observation store (`wc/obs/source=<source>/`)
-- `gs://ism-data/chips/train/` — 64×64 training chips + manifest.parquet
-- `gs://ism-data/embeddings/` — Clay Zarr cubes
-- `gs://ism-data/pca/` — IncrementalPCA artifacts
-- `gs://ism-data/runs/` — Lightning checkpoints, MLflow db
-- `gs://ism-data/outputs/` — triplet COGs, reports
-
-## Authentication
-
-- **Local dev**: Application Default Credentials via `gcloud auth application-default login`. `gcsfs` and `google-cloud-storage` read ADC automatically. GDAL `/vsigs/` does **not** — `cmrv.io.configure_gdal_gcs()` extracts the OAuth2 triple from ADC and sets `GS_OAUTH2_REFRESH_TOKEN`/`GS_OAUTH2_CLIENT_ID`/`GS_OAUTH2_CLIENT_SECRET` so streaming works. It is invoked automatically by `cmrv.io.open_raster()` — always use that helper, never `rasterio.open("/vsigs/...")` directly. **Never** commit service-account JSON keys.
-- **Vertex AI / Cloud Run**: attach a least-privilege service account with `storage.objectAdmin` on `ism-data`. Workload Identity preferred over JSON keys.
-- **Secrets** (PC subscription key, HF token, etc.): local dev uses `.env` (gitignored); prod uses Google Secret Manager. Reference `.env.example` for required vars.
-
-## Data sourcing rule
-
-Always prefer South African sources first: SAEON, SANBI (BGIS, Vegmap, SAPIA, POSA), SANSA, DWS, DFFE, NGI, SAWS, ARC, CapeNature, Elsenburg, City of Cape Town open data. Only fall back to global (MPC Sentinel-2, Copernicus DEM) when no SA equivalent exists or coverage is insufficient.
-
-## AOI boundary data
-
-Quaternary catchment boundaries and SA provincial boundaries are from **waterresourceswr2012.co.za** (free registration required). Files live in `data/aoi/`:
-- `SA_Catchm_Quaternary.shp` — DWS quaternary catchments (field: `QUATERNARY`, CRS: EPSG:4148)
-- `SA_Provincial_bnd_dd.shp` — SA provincial boundaries (field: `PROVINCE`, CRS: EPSG:4148)
-
-HydroBASINS and geoBoundaries are no longer used — all AOI work uses the SA-specific layers above.
+- **Always `uv`** — never `pip install`, never `conda`, never `poetry`. `uv add <pkg>` to add a dep; `uv sync` to install; `uv run <cmd>` to execute.
+- The virtualenv lives at `.venv` (uv default). **It is not committed and is currently absent — recreate it with `uv sync`.**
+- Python 3.12 pinned. `uv.lock` is committed; regenerate only via `uv lock --upgrade` or `uv add`.
+- Run the CLI via `uv run cmrv <verb> ...`.
 
 ## Storage format rules
 
-- **Vector / tabular → Parquet (GeoParquet for geometry)**. No GeoJSON, no shapefile, no CSV in the pipeline. Single file by default — **partition only when size justifies it** (rough trigger: >100 MB or >1M rows). Read/write via `cmrv.io` (`read_gdf`, `write_gdf_parquet`) which handles both local and `gs://`.
-- **Raster → Cloud-Optimized GeoTIFF (COG)**. Validated with `rio-cogeo validate`.
-- **N-d arrays (embeddings) → Zarr v3** with chunks matching the DataLoader (`(1, 256, 256, 768)` per roadmap §5).
-- Caches, downloads, and scratch artifacts live in `<project>/data/` (gitignored), not `~/.cache/`.
+- **Vector / tabular → Parquet (GeoParquet for geometry).** No GeoJSON, no shapefile, no CSV in the pipeline. Read/write via `cmrv.io` (`read_gdf`, `write_gdf_parquet`).
+- **Raster → Cloud-Optimized GeoTIFF (COG)**, validated with `rio-cogeo validate`. Write via `cmrv.io.write_cog`.
+- **N-d arrays (embeddings) → Zarr v3** with chunks matching the DataLoader (`(1, 256, 256, D)`).
 
 ## Consolidated IO helpers (`cmrv.io`)
 
-All shared IO patterns live in `src/cmrv/io.py` — no module should duplicate these:
+All shared IO lives in `src/cmrv/io.py` — no module duplicates these:
+`load_config`, `list_parquet_files`, `open_raster`, `write_cog`,
+`read_parquet_df`/`write_parquet_df`, `read_gdf`/`write_gdf_parquet`. pandas +
+geopandas/pyogrio do all Parquet I/O (no DuckDB). `read_gdf` decodes the WKB +
+`__crs__` GeoParquet this module writes, falling back to native GeoParquet.
 
-- **`load_config`** — single YAML loader (local or `gs://` via fsspec).
-- **`_duckdb_con`** — single DuckDB connection factory with GCS credential chain. All modules use this; no duplicate factories.
-- **`list_parquet_files`** — partition discovery (`*.parquet`, excludes `_tmp_` dirs). Replaces ad-hoc walk/listing in individual modules.
-- **`write_cog`** — single COG writer (temp file + `cog_translate` + upload). Both `composite.py` and `fuse.py` delegate here.
-- **`read_gdf` / `write_gdf_parquet`** — DuckDB-based GeoParquet streaming (geometry as WKB + `__crs__`).
-- **`open_raster`** — streaming raster reads via GDAL `/vsigs/`.
+## Label sources
 
-## Chip extraction & splitting
+Training signal comes only from **plot/transect datasets that measure cover**
+(GBIF/iNat occurrence points are dropped — a lone-tree GPS point is a mixed
+2.5 m pixel). One **adapter per scientific dataset**, all emitting the unified
+observation schema:
 
-Extraction and splitting are **decoupled** — different concerns, different commands:
+1. **BioSCape** (`cmrv labels-bioscape-ingest`) — Berg+Eerste VegPlots field
+   plots; the figshare *BioSCape Raw Training Dataset* when released.
+2. Future journal/field datasets — add a sibling `labels-<dataset>-ingest` verb
+   (a small loader mapping the source's columns → the schema). No data is
+   present yet; don't hardcode dataset DOI/license/names — leave them null + TODO.
 
-- **`cmrv ingest-chips`** — extracts 64×64 px chips (10m) per label × 4 months from MPC STAC. Writes chips to `gs://ism-data/chips/train/{obs_id}/{year}/{month}.tif` and a fold-free `manifest.parquet`. Manifest-based incremental resume: re-running skips already-chipped obs_ids. Labels must have `block_id` (assigned via spatial join to 20km blocks in CLI).
-- **`cmrv make-split`** — runs at training time. Reads manifest, filters by species + min_months, spatially thins (default 20m = Clay patch footprint at 2.5m GSD), assigns blocks to train/val/test folds via stratified greedy algorithm with seed-controlled tie-breaking, tags boundary blocks for leakage diagnostics. Different seeds produce different splits for ensemble uncertainty estimation.
+Every observation carries provenance + quality fields: `source`, `source_url`,
+`source_doi`, `license`, `coord_uncertainty_m`, `cover_pct`. Training gates on
+`coord_uncertainty_m` (≤40 m at chip time) and, once cover data lands, on
+`cover_pct` (the pure-pixel gate — `load_training_labels(min_cover_pct=…)`).
 
-## One-time setup commands
+**The species list is a single source of truth: `class_maps.<name>.members[]` in
+[configs/labels_schema.yaml](configs/labels_schema.yaml).** Append a binomial to
+a class's `members[]` and both the runtime species→class lookup and each
+adapter's IAP membership derive from it. `class_id` is never assigned at ingest —
+it's applied at `make-split` time via `--class-map`.
 
-These CLI subcommands produce reference data and only need to run once (unless the source is updated):
+## AOI boundary data
 
-- `cmrv labels-nemba-extract` — parses NEMBA Gazette PDF → `data/labels/nemba_plants.parquet`
-- `cmrv labels-nemba-resolve` — resolves NEMBA taxa via GBIF API → `gs://ism-data/labels/nemba_taxa_resolved.parquet`
+The AOI is the **Western Cape province** (scales to SA later by dissolving more
+provinces). Boundary from **waterresourceswr2012.co.za** (free registration):
+- `data/aoi/SA_Provincial_bnd_dd.shp` — SA provincial boundaries (field `PROVINCE`, EPSG:4148)
+
+## Pipeline verbs
+
+`uv run cmrv <verb>`. Label flow:
+
+```
+labels-bioscape-ingest → BioSCape field plots into the obs store (one adapter per source)
+labels                 → inspect the store (per-source counts + coverage); optional AOI/species preview
+ingest-chips           → thin → 64×64 chip per (obs_id, month); writes manifest.parquet
+chips-stats            → species × spatial × temporal stats from the manifest
+make-split             → spatial-block train/val/test split + --class-map → class_id
+```
+
+Per-tile imagery + downstream: `aoi-wc` / `aoi-tiles` (once), `ingest-month`
+(S2 composites for inference), then SR → embed → train → infer (later stages).
+Months for the chip stack are **Feb/May/Sep** (WC phenology — see `pipeline.yaml`).
 
 ## Common tripwires
 
-- Use DuckDB for streaming I/O (via `cmrv.io` helpers); pandas is fine for in-memory label processing.
-- Raster/vector CRS: always declare, always convert via `rioxarray.reproject_match`. Tile grid work happens in UTM 34S (EPSG:32734), not WGS84.
-- Zarr chunks match DataLoader sampling: `(1, 256, 256, 768)` — see roadmap §5.
-- Every COG must pass `rio-cogeo validate`.
-- No dask cluster. `stackstac`'s internal dask is enough.
+- **CRS drift.** Vector labels in WGS84, rasters in UTM 34S (EPSG:32734), embeddings in pixel coords. Always declare CRS; convert via `rioxarray.reproject_match`. Tile/block grids are built in UTM, never WGS84.
+- **Patch math.** Clay patch = 8, SEN2SR upsample = 4×. At 2.5 m input, one patch = 20 m; a 256-px chip = 32×32 patch tokens.
+- **Month availability.** Some tiles have 0 valid scenes in a month — pass a `month_mask` so the temporal head ignores missing months; don't drop the tile.
+- **Label leakage.** Build spatial-block splits *before* training; never train on a block overlapping a held-out one.
+- **Silent fp16 NaNs.** Clay + AMP can emit NaN on bad input — assert `torch.isfinite(...)` after each Clay forward.
+- **No distributed dask.** `stackstac`'s internal dask is enough; one box.
 
-## Working style (also in ~/.claude/CLAUDE.md, reinforced here)
+## Working style
 
 - Plan-first: non-trivial tasks get a `tasks/todo.md` update before code.
 - One corrected mistake → one new rule in `tasks/lessons.md`.
-- Don't mark tasks done until verified (tests green, artifact exists, behaviour demonstrated).
-- Don't scope-creep the roadmap — defer Phase 1 ambitions (U-Net student, multi-catchment, prod API, SAM).
+- Don't mark a task done until verified (tests green, artifact exists, behaviour demonstrated).
+- Don't scope-creep — defer Lens B/C/D, multi-catchment, production API, native classes.

@@ -9,18 +9,13 @@ dependencies = [
     "pyogrio>=0.9",
     "pyarrow>=17",
     "fsspec>=2024.10",
-    "gcsfs>=2024.10",
-    "google-cloud-storage>=2.18",
     "numpy>=1.26,<3",
     "tyro>=0.9",
     "pydantic-settings>=2.5",
     "loguru>=0.7",
     "requests>=2.32",
     "pyyaml>=6",
-    "pygbif>=0.6.6",
-    "pytaxize>=0.7.0",
     "setuptools>=82.0.1",
-    "pdfplumber>=0.11.9",
     "rasterio>=1.5.0",
     "rio-cogeo>=7.0.2",
     "pystac-client>=0.9.0",
@@ -28,8 +23,6 @@ dependencies = [
     "planetary-computer>=1.0.0",
     "rioxarray>=0.22.0",
     "xarray>=2026.4.0",
-    "duckdb>=1.5.2",
-    "azure-storage-blob>=12.28.0",
 ]
 
 [dependency-groups]

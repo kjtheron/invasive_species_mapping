@@ -22,13 +22,12 @@ def _make_gdf(rows: list[dict]) -> gpd.GeoDataFrame:
     """Minimal GeoDataFrame with all required schema columns."""
     base = {
         "obs_id": None,
-        "source": "gbif",
+        "source": "bioscape_plot",
         "source_record_id": "0",
         "source_url": None,
         "species": None,
         "species_normalized": None,
         "gbif_usage_key": None,
-        "nemba_category": None,
         "geom_type": "point",
         "coord_uncertainty_m": None,
         "event_date": None,
@@ -66,10 +65,10 @@ def test_upsert_same_obs_id_keeps_latest() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
 
-        write_source_partition(gdf_first, "gbif", root=root, run_id="run1")
-        write_source_partition(gdf_second, "gbif", root=root, run_id="run2")
+        write_source_partition(gdf_first, "bioscape_plot", root=root, run_id="run1")
+        write_source_partition(gdf_second, "bioscape_plot", root=root, run_id="run2")
 
-        files = list(Path(f"{root}/source=gbif").glob("*.parquet"))
+        files = list(Path(f"{root}/source=bioscape_plot").glob("*.parquet"))
         assert len(files) == 1, "should be exactly one partition file after upsert"
 
         df = pd.read_parquet(str(files[0]))
@@ -89,9 +88,9 @@ def test_upsert_distinct_obs_ids_both_retained() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_source_partition(gdf, "gbif", root=root, run_id="run1")
+        write_source_partition(gdf, "bioscape_plot", root=root, run_id="run1")
 
-        files = list(Path(f"{root}/source=gbif").glob("*.parquet"))
+        files = list(Path(f"{root}/source=bioscape_plot").glob("*.parquet"))
         df = pd.read_parquet(str(files[0]))
         assert len(df) == 2
 
@@ -106,10 +105,10 @@ def test_upsert_idempotent() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_source_partition(gdf, "gbif", root=root, run_id="run1")
-        write_source_partition(gdf, "gbif", root=root, run_id="run2")
+        write_source_partition(gdf, "bioscape_plot", root=root, run_id="run1")
+        write_source_partition(gdf, "bioscape_plot", root=root, run_id="run2")
 
-        files = list(Path(f"{root}/source=gbif").glob("*.parquet"))
+        files = list(Path(f"{root}/source=bioscape_plot").glob("*.parquet"))
         df = pd.read_parquet(str(files[0]))
         assert len(df) == 2, "re-ingest of same rows should remain at 2"
 

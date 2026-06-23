@@ -24,13 +24,8 @@ CRS handling:
 Performance:
     - Tight bounding box around label cluster (not full 20 km block)
     - Concurrent group processing via ThreadPoolExecutor
-    - Batched per-month compute (float32 graphs; HTTP I/O overlapped)
-    - Batch GCS uploads via a temp directory per group
+    - Per-label window compute (only the kept pixels are materialised)
     - Manifest-based incremental resume (per-group shards; crash-safe)
-
-Fire filtering:
-    Labels at locations that burned during the observation year (MODIS MCD64A1
-    500 m monthly burned area via MPC STAC) are flagged before splitting.
 """
 
 from __future__ import annotations
@@ -60,7 +55,6 @@ import rasterio
 import stackstac
 import xarray as xr
 from loguru import logger
-from pyproj import Transformer
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from rasterio.windows import Window
@@ -70,7 +64,7 @@ from shapely.ops import unary_union
 
 from cmrv.ingest.cloud_mask import apply_scl_mask
 from cmrv.ingest.composite import _transform_from_da, monthly_median
-from cmrv.io import is_gcs, read_parquet_df, upload_file, write_parquet_df
+from cmrv.io import ensure_parent, read_parquet_df, write_parquet_df
 
 CHIP_PX = 64
 RESOLUTION_M = 10
@@ -79,7 +73,7 @@ BUFFER_M = (CHIP_PX * RESOLUTION_M) / 2
 # usable for training where NaN-tolerant patch masking is downstream; record
 # the actual valid_frac in the manifest for sample weighting.
 MIN_VALID_FRAC = 0.3
-BLOCK_KM = 20
+BLOCK_KM = 10
 # Default ±days padding around each calendar-month window (chips only).
 # Widening to ±15d roughly doubles the candidate-scene pool per window so
 # the median can recover cloud-free pixels in cloudy months.
@@ -280,103 +274,6 @@ def temporal_windows(
 
 
 # ---------------------------------------------------------------------------
-# Fire mask (MODIS MCD64A1 via MPC)
-# ---------------------------------------------------------------------------
-
-BURN_COLLECTION = "modis-64A1-061"
-
-
-def flag_burned_labels(
-    labels: gpd.GeoDataFrame,
-    years: list[int] | None = None,
-    epsg: int = 32734,
-) -> gpd.GeoDataFrame:
-    """Flag labels at locations that burned during their observation year.
-
-    Queries MODIS MCD64A1 (500 m monthly burned area) on MPC, one raster per
-    unique label year.  Adds a boolean ``burned`` column.
-    """
-    labels = labels.copy()
-    ed = pd.to_datetime(labels["event_date"], errors="coerce")
-    labels["_year"] = ed.dt.year
-
-    if years is None:
-        years = sorted(labels["_year"].dropna().unique().astype(int).tolist())
-
-    client = _stac_client()
-    labels["burned"] = False
-
-    for year in years:
-        mask = labels["_year"] == year
-        subset = labels.loc[mask]
-        if subset.empty:
-            continue
-
-        bbox_wgs = subset.to_crs("EPSG:4326").total_bounds  # [minx, miny, maxx, maxy]
-        items = client.search(
-            collections=[BURN_COLLECTION],
-            bbox=bbox_wgs.tolist(),
-            datetime=f"{year}-01-01/{year}-12-31",
-        ).item_collection()
-        pc.sign_inplace(items)
-
-        if len(items) == 0:
-            logger.info("burn check {}: no MODIS burn data — skipping", year)
-            continue
-
-        da = stackstac.stack(
-            items,
-            assets=["Burn_Date"],
-            resolution=500,
-            epsg=epsg,
-            bounds_latlon=bbox_wgs.tolist(),
-            dtype="float64",
-            fill_value=float("nan"),
-            rescale=False,
-        )
-        burn_any = (da.fillna(0) > 0).any(dim="time").squeeze("band").compute()
-        burn_tf = _transform_from_da(burn_any)
-
-        n_burned = 0
-        for idx in subset.index:
-            pt = labels.loc[idx, "geometry"]
-            if pt is None:
-                continue
-            lon, lat = pt.x, pt.y
-            x_utm, y_utm = Transformer.from_crs(
-                "EPSG:4326", f"EPSG:{epsg}", always_xy=True
-            ).transform(lon, lat)
-            try:
-                r, c = rowcol(burn_tf, x_utm, y_utm)
-                r, c = int(r), int(c)
-                if (
-                    0 <= r < burn_any.sizes["y"]
-                    and 0 <= c < burn_any.sizes["x"]
-                    and bool(burn_any.isel(y=r, x=c).values)
-                ):
-                    labels.loc[idx, "burned"] = True
-                    n_burned += 1
-            except Exception:
-                continue
-
-        logger.info(
-            "burn check {}: {}/{} labels at burned locations",
-            year,
-            n_burned,
-            len(subset),
-        )
-
-    total_burned = labels["burned"].sum()
-    logger.info(
-        "fire filter: {} of {} labels flagged as burned ({:.1f}%)",
-        total_burned,
-        len(labels),
-        100 * total_burned / len(labels) if len(labels) > 0 else 0,
-    )
-    return labels.drop(columns=["_year"])
-
-
-# ---------------------------------------------------------------------------
 # STAC helpers (reusable client)
 # ---------------------------------------------------------------------------
 
@@ -484,36 +381,81 @@ def _download_item_assets(item, bands: list[str], tmp_dir: Path) -> dict[str, st
     return local_paths
 
 
+ChipResult = tuple[np.ndarray, rasterio.transform.Affine, float]
+
+
+def _window_medians(
+    stack: xr.DataArray,
+    points_utm: list[tuple[float, float]],
+    chip_px: int = CHIP_PX,
+) -> list[ChipResult | str]:
+    """Per-point 64×64 window median from a lazy (time, band, y, x) masked stack.
+
+    Slices each point's window lazily, medians over time, and computes all
+    windows in **one** ``dask.compute`` — so only the pixels inside the windows
+    are materialised, never the gaps between sparse labels.
+
+    Returns, aligned to ``points_utm``: ``(arr, chip_transform, valid_frac)`` on
+    success, or a reason string ``"oob"`` / ``"low_valid_frac=<f>"``.
+    ``valid_frac`` = fraction of pixels finite across **all** bands.
+    """
+    transform = _transform_from_da(stack)
+    ny, nx = stack.sizes["y"], stack.sizes["x"]
+    half = chip_px // 2
+
+    results: list[ChipResult | str | None] = [None] * len(points_utm)
+    lazy: list[xr.DataArray] = []
+    pending: list[tuple[int, int, int]] = []  # (result_idx, r0, c0)
+
+    for i, (x_utm, y_utm) in enumerate(points_utm):
+        row, col = rowcol(transform, x_utm, y_utm)
+        r0, c0 = int(row) - half, int(col) - half
+        if r0 < 0 or c0 < 0 or r0 + chip_px > ny or c0 + chip_px > nx:
+            results[i] = "oob"
+            continue
+        win = stack.isel(y=slice(r0, r0 + chip_px), x=slice(c0, c0 + chip_px))
+        lazy.append(monthly_median(win))
+        pending.append((i, r0, c0))
+
+    if lazy:
+        for (i, r0, c0), med in zip(pending, dask.compute(*lazy), strict=True):
+            arr = np.asarray(med.values, dtype="float32")
+            valid_frac = float(np.isfinite(arr).all(axis=0).mean())
+            if valid_frac < MIN_VALID_FRAC:
+                results[i] = f"low_valid_frac={valid_frac:.2f}"
+            else:
+                chip_tf = window_transform(Window(c0, r0, chip_px, chip_px), transform)
+                results[i] = (arr, chip_tf, valid_frac)
+
+    return results  # type: ignore[return-value]  # every slot is filled above
+
+
 def _compute_month(
     client: pystac_client.Client,
     geom_wgs84,
     date_start: str,
     date_end: str,
     bands: list[str],
+    points_utm: list[tuple[float, float]],
     *,
+    chip_px: int = CHIP_PX,
     cloud_cover_max: int = 40,
     resolution_m: int = RESOLUTION_M,
     epsg: int = 32734,
     max_retries: int = 3,
     retry_delay_s: float = 10.0,
-) -> xr.DataArray | None:
-    """Query, stack, and compute one monthly composite with retries.
+) -> list[ChipResult | str] | None:
+    """Query + stack + per-label window median for one month, with retries.
 
-    On transient IO failure the items are re-signed and the compute retried.
-    If retries are exhausted, falls back to downloading each scene's assets
-    locally before the final attempt. Returns None if no scenes or all
-    attempts fail.
-
-    The initial STAC query is also retried — a transient network failure on
-    `client.search` no longer aborts the month.
+    On transient IO failure the items are re-signed and the windowed compute
+    retried. If retries are exhausted, falls back to downloading each scene's
+    assets locally. Returns the per-point results from :func:`_window_medians`
+    (aligned to ``points_utm``), or None if no scenes / all attempts fail.
     """
     items: list = []
     last_exc: Exception | None = None
     for attempt in range(1, max_retries + 2):  # +1 for the download-fallback attempt
         try:
-            # Initial query is retryable too: transient PC/STAC failures shouldn't
-            # abort the month. Items are signed once in _query_items; we only
-            # re-sign on retry attempts > 1 in case the original signatures got stale.
             if not items:
                 items = _query_items(
                     client, geom_wgs84, date_start, date_end, cloud_cover_max=cloud_cover_max
@@ -535,45 +477,40 @@ def _compute_month(
                         _strip_sas_inplace(item)
                         pc.sign_inplace(item)
                 lazy = _stack_items(items, geom_wgs84, bands, resolution_m=resolution_m, epsg=epsg)
-                # Reduce (time, band, y, x) → (band, y, x) before materialising.
-                lazy = monthly_median(lazy)
-                (composite,) = dask.compute(lazy)
-            else:
-                # Final fallback: re-sign + download each scene's assets locally.
-                logger.info(
-                    "  {}/{}: streaming failed {} times — downloading assets locally",
-                    date_start,
-                    date_end,
-                    max_retries,
-                )
+                return _window_medians(lazy, points_utm, chip_px)
+
+            # Final fallback: re-sign + download each scene's assets locally.
+            logger.info(
+                "  {}/{}: streaming failed {} times — downloading assets locally",
+                date_start,
+                date_end,
+                max_retries,
+            )
+            for item in items:
+                _strip_sas_inplace(item)
+                pc.sign_inplace(item)
+            dl_tmp = Path(tempfile.mkdtemp(prefix="s2dl_"))
+            try:
+                import copy
+
+                local_items = []
                 for item in items:
-                    _strip_sas_inplace(item)
-                    pc.sign_inplace(item)
-                dl_tmp = Path(tempfile.mkdtemp(prefix="s2dl_"))
-                try:
-                    import copy
-
-                    local_items = []
-                    for item in items:
-                        local_paths = _download_item_assets(item, bands, dl_tmp)
-                        if not local_paths:
-                            continue
-                        patched = copy.deepcopy(item)
-                        for key, path in local_paths.items():
-                            if key in patched.assets:
-                                patched.assets[key].href = path
-                        local_items.append(patched)
-                    if not local_items:
-                        return None
-                    lazy = _stack_items(
-                        local_items, geom_wgs84, bands, resolution_m=resolution_m, epsg=epsg
-                    )
-                    lazy = monthly_median(lazy)
-                    (composite,) = dask.compute(lazy)
-                finally:
-                    shutil.rmtree(dl_tmp, ignore_errors=True)
-
-            return composite
+                    local_paths = _download_item_assets(item, bands, dl_tmp)
+                    if not local_paths:
+                        continue
+                    patched = copy.deepcopy(item)
+                    for key, path in local_paths.items():
+                        if key in patched.assets:
+                            patched.assets[key].href = path
+                    local_items.append(patched)
+                if not local_items:
+                    return None
+                lazy = _stack_items(
+                    local_items, geom_wgs84, bands, resolution_m=resolution_m, epsg=epsg
+                )
+                return _window_medians(lazy, points_utm, chip_px)
+            finally:
+                shutil.rmtree(dl_tmp, ignore_errors=True)
 
         except Exception as exc:
             last_exc = exc
@@ -630,53 +567,6 @@ def _write_chip_local(
         dst.write(arr)
 
 
-def _upload_batch(local_dir: Path, gcs_prefix: str) -> None:
-    """Upload all files under *local_dir* to GCS, preserving subdir structure."""
-    for path in sorted(local_dir.rglob("*.tif")):
-        rel = path.relative_to(local_dir)
-        gcs_uri = f"{gcs_prefix}/{rel}"
-        upload_file(str(path), gcs_uri)
-
-
-def _extract_one(
-    composite: xr.DataArray,
-    transform: rasterio.transform.Affine,
-    x_utm: float,
-    y_utm: float,
-    chip_px: int = CHIP_PX,
-) -> tuple[np.ndarray, rasterio.transform.Affine, float] | str:
-    """Slice a chip from *composite* centred on a UTM point.
-
-    Returns ``(array, chip_transform, valid_frac)`` on success, or a string
-    reason on rejection: ``"oob"`` (window outside composite) or
-    ``"low_valid_frac=<f>"`` (too many cloud/shadow-masked pixels).
-
-    ``valid_frac`` is the fraction of pixels where **every** band is finite —
-    a pixel with even one NaN band is treated as invalid. This is stricter
-    than the per-element mean and matches what downstream models actually need
-    (no per-pixel band imputation).
-    """
-    row, col = rowcol(transform, x_utm, y_utm)
-    row, col = int(row), int(col)
-    half = chip_px // 2
-    r0, c0 = row - half, col - half
-
-    ny, nx = composite.sizes["y"], composite.sizes["x"]
-    if r0 < 0 or c0 < 0 or r0 + chip_px > ny or c0 + chip_px > nx:
-        return "oob"
-
-    arr = composite.isel(y=slice(r0, r0 + chip_px), x=slice(c0, c0 + chip_px)).values.astype(
-        "float32"
-    )
-
-    valid_frac = float(np.isfinite(arr).all(axis=0).mean())
-    if valid_frac < MIN_VALID_FRAC:
-        return f"low_valid_frac={valid_frac:.2f}"
-
-    chip_tf = window_transform(Window(c0, r0, chip_px, chip_px), transform)
-    return arr, chip_tf, valid_frac
-
-
 # ---------------------------------------------------------------------------
 # Tight bounding box for label clusters
 # ---------------------------------------------------------------------------
@@ -715,7 +605,6 @@ def _process_group(
     months_cfg: list[dict],
     bands: list[str],
     out_prefix: str,
-    use_gcs: bool,
     crs: CRS,
     chip_px: int,
     resolution_m: int,
@@ -750,8 +639,6 @@ def _process_group(
     # kill the other months. Each month is retried (with re-sign) before falling
     # back to a local download of the scene assets.
     rows: list[dict] = []
-    tmp_dir = Path(tempfile.mkdtemp(prefix="chips_")) if use_gcs else None
-    any_written = False
 
     for win in windows:
         month_label = win["label"]
@@ -768,17 +655,20 @@ def _process_group(
             )
             continue
 
-        composite = _compute_month(
+        pending_rows = list(pending.itertuples())
+        results = _compute_month(
             client,
             cluster_wgs84,
             win["start"],
             win["end"],
             bands,
+            points_utm=[(r.geometry.x, r.geometry.y) for r in pending_rows],
+            chip_px=chip_px,
             cloud_cover_max=cloud_cover_max,
             resolution_m=resolution_m,
             epsg=epsg,
         )
-        if composite is None:
+        if results is None:
             logger.warning(
                 "  block {} / {} {}: skipped (no scenes or all retries failed)",
                 bid,
@@ -787,50 +677,18 @@ def _process_group(
             )
             continue
 
-        tf = _transform_from_da(composite)
         n_written = 0
-        drops = {"oob": 0, "low_valid_frac": 0, "extract_error": 0, "write_error": 0}
+        drops = {"oob": 0, "low_valid_frac": 0, "write_error": 0}
 
-        for row in pending.itertuples():
-            # Per-chip isolation: one bad label geometry never kills other chips.
-            try:
-                result = _extract_one(
-                    composite,
-                    tf,
-                    row.geometry.x,
-                    row.geometry.y,
-                    chip_px,
-                )
-            except Exception as exc:
-                drops["extract_error"] += 1
-                logger.warning(
-                    "  chip extract failed for obs_id={} {}/{}: {}",
-                    row.obs_id,
-                    month_label,
-                    year,
-                    exc,
-                )
-                continue
-
+        for row, result in zip(pending_rows, results, strict=True):
             if isinstance(result, str):
-                key = "oob" if result == "oob" else "low_valid_frac"
-                drops[key] += 1
-                logger.debug(
-                    "  chip drop obs_id={} {}/{}: {}",
-                    row.obs_id,
-                    month_label,
-                    year,
-                    result,
-                )
+                drops["oob" if result == "oob" else "low_valid_frac"] += 1
                 continue
             arr, chip_tf, valid_frac = result
 
             rel_path = f"{row.obs_id}/{year}/{month_label}.tif"
             try:
-                if use_gcs:
-                    _write_chip_local(arr, chip_tf, crs, tmp_dir / rel_path)
-                else:
-                    _write_chip_local(arr, chip_tf, crs, f"{out_prefix}/{rel_path}")
+                _write_chip_local(arr, chip_tf, crs, f"{out_prefix}/{rel_path}")
             except Exception as exc:
                 drops["write_error"] += 1
                 logger.warning(
@@ -858,22 +716,15 @@ def _process_group(
             )
 
         logger.info(
-            "  {} {}: {}/{} chips (drops: cloud={} oob={} extract_err={} write_err={})",
+            "  {} {}: {}/{} chips (drops: cloud={} oob={} write_err={})",
             month_label,
             year,
             n_written,
-            len(pending),
+            len(pending_rows),
             drops["low_valid_frac"],
             drops["oob"],
-            drops["extract_error"],
             drops["write_error"],
         )
-        any_written = any_written or n_written > 0
-
-    if use_gcs and tmp_dir is not None:
-        if any_written:
-            _upload_batch(tmp_dir, out_prefix)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # Persist this group's rows *after* chips are at their final location, so
     # a mid-run crash still leaves a consistent shard → manifest recovery path.
@@ -889,16 +740,7 @@ def _load_existing_manifest(out_prefix: str) -> pd.DataFrame | None:
     error (corruption, partial write, permissions) is raised — silently treating
     a corrupt manifest as missing would re-chip the entire dataset from scratch.
     """
-    manifest_uri = f"{out_prefix}/manifest.parquet"
-    if is_gcs(manifest_uri):
-        import fsspec
-
-        fs, path = fsspec.core.url_to_fs(manifest_uri)
-        if not fs.exists(path):
-            return None
-        with fsspec.open(manifest_uri, "rb") as f:
-            return pd.read_parquet(f)
-    p = Path(manifest_uri)
+    p = Path(f"{out_prefix}/manifest.parquet")
     if not p.exists():
         return None
     return pd.read_parquet(p)
@@ -909,8 +751,8 @@ def _load_existing_manifest(out_prefix: str) -> pd.DataFrame | None:
 # ---------------------------------------------------------------------------
 #
 # Each worker writes a small parquet shard to ``{out_prefix}/_manifest_shards/
-# {bid}_{year}.parquet`` immediately after its chips are uploaded.  If the run
-# crashes, the chips on GCS and the shards agree, so the next startup folds the
+# {bid}_{year}.parquet`` immediately after its chips are written.  If the run
+# crashes, the chips on disk and the shards agree, so the next startup folds the
 # shards into ``manifest.parquet`` and incremental skip sees them.  Shard paths
 # are unique per group, so workers never collide.
 
@@ -931,18 +773,7 @@ def _write_manifest_shard(rows: list[dict], out_prefix: str, bid: int, year: int
 
 
 def _list_shards(out_prefix: str) -> list[str]:
-    shards_dir = _shards_dir(out_prefix)
-    if is_gcs(shards_dir):
-        import fsspec
-
-        fs, path = fsspec.core.url_to_fs(shards_dir)
-        if not fs.exists(path):
-            return []
-        hits = fs.glob(f"{path}/*.parquet")
-        protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
-        prefix = f"{protocol}://" if protocol != "file" else ""
-        return [f"{prefix}{h}" for h in hits]
-    p = Path(shards_dir)
+    p = Path(_shards_dir(out_prefix))
     return [str(x) for x in p.glob("*.parquet")] if p.exists() else []
 
 
@@ -965,15 +796,7 @@ def _read_shards(out_prefix: str, shards: list[str] | None = None) -> pd.DataFra
 
 
 def _delete_shards(out_prefix: str) -> None:
-    shards_dir = _shards_dir(out_prefix)
-    if is_gcs(shards_dir):
-        import fsspec
-
-        fs, path = fsspec.core.url_to_fs(shards_dir)
-        if fs.exists(path):
-            fs.rm(path, recursive=True)
-        return
-    p = Path(shards_dir)
+    p = Path(_shards_dir(out_prefix))
     if p.exists():
         shutil.rmtree(p, ignore_errors=True)
 
@@ -1002,16 +825,10 @@ def _consolidate_shards(out_prefix: str, existing: pd.DataFrame | None) -> tuple
 def _load_block_folds(uri: str) -> dict[int, str] | None:
     """Load persisted block→fold mapping if it exists."""
     try:
-        if is_gcs(uri):
-            import fsspec
-
-            with fsspec.open(uri, "rb") as f:
-                df = pd.read_parquet(f)
-        else:
-            p = Path(uri)
-            if not p.exists():
-                raise FileNotFoundError
-            df = pd.read_parquet(p)
+        p = Path(uri)
+        if not p.exists():
+            raise FileNotFoundError
+        df = pd.read_parquet(p)
         mapping = dict(zip(df["block_id"], df["fold"], strict=True))
         logger.info("loaded block folds: {} blocks from {}", len(mapping), uri)
         return mapping
@@ -1035,98 +852,40 @@ def _write_split_files(manifest: pd.DataFrame, out_prefix: str) -> None:
         ids = manifest.loc[manifest["fold"] == fold, "obs_id"].unique()
         split_uri = f"{out_prefix}/{fold}.txt"
         split_content = "\n".join(sorted(ids)) + "\n"
-        if is_gcs(split_uri):
-            tmp = Path(tempfile.mktemp(suffix=".txt"))
-            tmp.write_text(split_content)
-            upload_file(str(tmp), split_uri)
-            tmp.unlink()
-        else:
-            Path(split_uri).write_text(split_content)
+        ensure_parent(split_uri)
+        Path(split_uri).write_text(split_content)
         logger.info("split file: {} obs_ids → {}", len(ids), split_uri)
 
 
-def _spatial_thin(manifest: pd.DataFrame, thin_m: float, seed: int) -> pd.DataFrame:
-    """Keep one label per species per ``thin_m`` grid cell.
+def thin_labels(
+    labels: gpd.GeoDataFrame,
+    thin_m: float,
+    seed: int = 42,
+    epsg: int = 32734,
+    species_col: str = "species_normalized",
+) -> gpd.GeoDataFrame:
+    """Keep one label per species per ``thin_m`` grid cell (run before extraction).
 
-    Snaps UTM coordinates to a grid, then within each (species, cell)
-    keeps a single obs_id.  The seed controls which label survives when
-    multiple compete for the same cell.
+    Snaps each label's UTM coordinate to a ``thin_m`` grid and keeps a single
+    label per ``(species, cell)`` — removing near-duplicates the embedding can't
+    distinguish (20 m = Clay patch footprint at 2.5 m) *before* any imagery is
+    fetched, so we never download chips we'd discard. ``seed`` picks the survivor.
     """
-    label_pts = manifest.drop_duplicates(subset=["obs_id"])[
-        ["obs_id", "species", "x_utm", "y_utm"]
-    ].copy()
-    label_pts["cell_x"] = (label_pts["x_utm"] // thin_m).astype(int)
-    label_pts["cell_y"] = (label_pts["y_utm"] // thin_m).astype(int)
-
+    if thin_m <= 0 or labels.empty:
+        return labels
+    utm = labels.to_crs(f"EPSG:{epsg}")
+    cell_x = (utm.geometry.x // thin_m).astype(int).to_numpy()
+    cell_y = (utm.geometry.y // thin_m).astype(int).to_numpy()
     rng = np.random.default_rng(seed)
-    label_pts = label_pts.iloc[rng.permutation(len(label_pts))].copy()
-    keep = label_pts.drop_duplicates(subset=["species", "cell_x", "cell_y"])
-    keep_ids = set(keep["obs_id"])
-
-    n_before = manifest["obs_id"].nunique()
-    manifest = manifest[manifest["obs_id"].isin(keep_ids)]
-    n_after = manifest["obs_id"].nunique()
-    logger.info(
-        "spatial thin ({}m): {} → {} obs_ids (removed {} duplicates)",
-        int(thin_m),
-        n_before,
-        n_after,
-        n_before - n_after,
+    order = rng.permutation(len(labels))
+    keep = (
+        labels.assign(_cx=cell_x, _cy=cell_y)
+        .iloc[order]
+        .drop_duplicates(subset=[species_col, "_cx", "_cy"])
+        .drop(columns=["_cx", "_cy"])
     )
-    return manifest
-
-
-def _adjacency_diagnostic(
-    manifest: pd.DataFrame,
-    blocks: gpd.GeoDataFrame,
-    block_to_fold: dict[int, str],
-) -> pd.DataFrame:
-    """Tag labels in boundary blocks and log fold-edge statistics.
-
-    A block is a *boundary* block if any of its spatial neighbors belongs
-    to a different fold.  Labels in boundary blocks are more susceptible
-    to spatial autocorrelation leakage.
-
-    Adds an ``is_boundary`` boolean column to the manifest.
-    """
-    assigned = blocks[blocks["block_id"].isin(block_to_fold)].copy()
-    assigned["fold"] = assigned["block_id"].map(block_to_fold)
-
-    # find neighbor pairs via small buffer (catches shared edges on the regular grid)
-    buffered = assigned.copy()
-    buffered["geometry"] = buffered.geometry.buffer(100)
-    pairs = gpd.sjoin(
-        buffered[["block_id", "fold", "geometry"]],
-        assigned[["block_id", "fold", "geometry"]],
-        how="inner",
-        predicate="intersects",
-        lsuffix="l",
-        rsuffix="r",
-    )
-    cross_fold = pairs[
-        (pairs["block_id_l"] != pairs["block_id_r"]) & (pairs["fold_l"] != pairs["fold_r"])
-    ]
-    boundary_bids = set(cross_fold["block_id_l"])
-
-    manifest = manifest.copy()
-    manifest["is_boundary"] = manifest["block_id"].isin(boundary_bids)
-
-    obs = manifest.drop_duplicates(subset=["obs_id"])
-    for fold in ["train", "val", "test"]:
-        fold_obs = obs[obs["fold"] == fold]
-        n_total = len(fold_obs)
-        n_boundary = fold_obs["is_boundary"].sum()
-        n_interior = n_total - n_boundary
-        pct = 100 * n_boundary / n_total if n_total > 0 else 0
-        logger.info(
-            "  {} adjacency: {} boundary / {} interior ({:.0f}% at fold edges)",
-            fold,
-            n_boundary,
-            n_interior,
-            pct,
-        )
-
-    return manifest
+    logger.info("spatial thin ({}m): {} → {} labels", int(thin_m), len(labels), len(keep))
+    return keep
 
 
 def make_split(
@@ -1137,18 +896,18 @@ def make_split(
     class_map_name: str | None = None,
     schema_path: str = "configs/labels_schema.yaml",
     seed: int = 42,
-    block_km: float = 20.0,
+    block_km: float = 10.0,
     train_frac: float = 0.70,
     val_frac: float = 0.15,
-    min_months: int = 4,
-    thin_m: float = 20.0,
     out_prefix: str | None = None,
     lock_folds: bool = True,
 ) -> pd.DataFrame:
     """Build a reproducible spatial split from a chip manifest.
 
-    Pipeline: load manifest → filter months → filter species → spatial
-    thin → spatial block split → adjacency diagnostic → assign class_id.
+    Pipeline: load manifest → filter species → spatial block split → assign
+    class_id. (Thinning happens earlier, before extraction, in ``thin_labels``;
+    obs with only 1–2 of the configured months are kept — the temporal head
+    masks missing timesteps.)
 
     Called at training time — decoupled from chip extraction so the same
     chips can be split differently across experiments.
@@ -1179,14 +938,6 @@ def make_split(
         Spatial block size in km (must match extraction).
     train_frac, val_frac : float
         Target proportions for train and validation folds.
-    min_months : int
-        Minimum number of month-chips per label. Labels with fewer are
-        dropped. Set to 1 to keep all labels.
-    thin_m : float
-        Spatial thinning distance in metres. Keeps one label per species
-        per ``thin_m`` grid cell to remove near-duplicate embeddings.
-        Default 20 m matches Clay v1.5 patch footprint at 2.5 m GSD.
-        Set to 0 to disable thinning.
     out_prefix : str | None
         If set, writes ``block_folds.parquet`` and ``{fold}.txt`` split files.
     lock_folds : bool
@@ -1196,8 +947,8 @@ def make_split(
     Returns
     -------
     pd.DataFrame
-        Manifest with ``fold``, ``is_boundary``, and (if ``class_map_name``
-        set) ``class_id`` columns added.
+        Manifest with ``fold`` and (if ``class_map_name`` set) ``class_id``
+        columns added.
     """
     from cmrv.io import read_gdf
 
@@ -1205,22 +956,11 @@ def make_split(
     if manifest is None or manifest.empty:
         raise ValueError(f"no manifest at {manifest_uri}")
 
-    # --- month completeness filter ---
+    # Month-completeness is informational only — we keep obs with 1–3 months
+    # and let the temporal head mask the gaps.
     months_per_obs = manifest.groupby("obs_id")["month_label"].nunique()
-    month_dist = months_per_obs.value_counts().sort_index()
-    for n_months, count in month_dist.items():
+    for n_months, count in months_per_obs.value_counts().sort_index().items():
         logger.info("  labels with {} month(s): {}", n_months, count)
-
-    if min_months > 1:
-        keep_ids = months_per_obs[months_per_obs >= min_months].index
-        n_dropped = manifest["obs_id"].nunique() - len(keep_ids)
-        if n_dropped > 0:
-            manifest = manifest[manifest["obs_id"].isin(keep_ids)]
-            logger.info(
-                "min_months={}: dropped {} labels with incomplete months",
-                min_months,
-                n_dropped,
-            )
 
     # --- species filter (exact match, case-insensitive) ---
     if species:
@@ -1236,10 +976,6 @@ def make_split(
         logger.info("species filter: {} → {} obs_ids", n_before, n_after)
         if manifest.empty:
             raise ValueError(f"no chips match species filter: {species}")
-
-    # --- spatial thinning (before splitting so block counts reflect thinned data) ---
-    if thin_m > 0:
-        manifest = _spatial_thin(manifest, thin_m, seed)
 
     aoi_gdf = read_gdf(aoi_uri)
     blocks = build_spatial_blocks(aoi_gdf, block_km=block_km)
@@ -1270,9 +1006,6 @@ def make_split(
         logger.warning("{} manifest rows have no fold (block outside AOI?)", orphan)
         manifest = manifest.dropna(subset=["fold"])
 
-    # --- adjacency diagnostic ---
-    manifest = _adjacency_diagnostic(manifest, blocks, block_to_fold)
-
     # --- genus/species → class_id collapsing ---
     # Behaviour:
     #   - No --species filter: drop unmapped (default conservative — unmapped
@@ -1295,9 +1028,7 @@ def make_split(
 
         n_unmapped = manifest["class_id"].isna().sum()
         if n_unmapped:
-            unmapped_sp = sorted(
-                manifest.loc[manifest["class_id"].isna(), "species"].unique()
-            )
+            unmapped_sp = sorted(manifest.loc[manifest["class_id"].isna(), "species"].unique())
             if species:
                 logger.warning(
                     "class_map '{}': {} rows ({} species) have no class_id "
@@ -1309,8 +1040,7 @@ def make_split(
                 )
             else:
                 logger.warning(
-                    "class_map '{}': {} rows ({} species) have no class_id "
-                    "— dropped: {}",
+                    "class_map '{}': {} rows ({} species) have no class_id — dropped: {}",
                     class_map_name,
                     n_unmapped,
                     len(unmapped_sp),
@@ -1398,7 +1128,6 @@ def extract_training_chips(
         raise ValueError("labels must have a 'block_id' column — spatial-join with blocks first")
 
     crs = CRS.from_epsg(epsg)
-    use_gcs = is_gcs(out_prefix)
 
     labels = labels.copy()
     if "_year" not in labels.columns:
@@ -1493,7 +1222,6 @@ def extract_training_chips(
                 months_cfg,
                 bands,
                 out_prefix,
-                use_gcs,
                 crs,
                 chip_px,
                 resolution_m,
