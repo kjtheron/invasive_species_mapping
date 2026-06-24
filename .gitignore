@@ -8,8 +8,11 @@ __pycache__/
 # Secrets
 .env
 
-# Pipeline artifacts (local-first; not committed)
-data/
+# Pipeline artifacts (local-first; not committed) — but keep dataset READMEs,
+# since the data itself can't be redistributed (must be re-downloaded).
+data/**
+!data/**/
+!data/**/README.md
 logs/
 
 # Data sourcing temp
