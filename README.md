@@ -80,11 +80,5 @@ uv run cmrv chips-stats        # see what landed
 # Train on a specific species set
 uv run cmrv make-split \
     --species "Acacia mearnsii" "Acacia saligna" "Pinus pinaster" \
-    --class-map-name upper_berg_12
+    --class-map-name western_cape_iap
 ```
-
-## Conventions
-
-- **Always `uv`** — never `pip install`, never `conda`, never `poetry`.
-- All artifacts under `data/` (local). Vector/tabular → Parquet; raster → COG; embeddings → Zarr v3.
-- Class crosswalk lives only in `configs/labels_schema.yaml → class_maps.<name>.<id>.members[]` — single source of truth.

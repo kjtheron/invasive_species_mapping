@@ -59,7 +59,7 @@ def stack_items(
 
     Includes the SCL band for downstream cloud masking. Spatial extent is
     clipped to ``tile_geom_wgs84`` bounds and reprojected to EPSG:``epsg``
-    (UTM 34S for the Berg River catchment).
+    (UTM 34S for the Western Cape).
     """
     return stackstac.stack(
         items,

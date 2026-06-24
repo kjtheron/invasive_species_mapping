@@ -57,7 +57,7 @@ def aoi_tiles(
 
 def labels_bioscape_ingest(
     schema: str = "configs/labels_schema.yaml",
-    class_map: str = "upper_berg_12",
+    class_map: str = "western_cape_iap",
     root: str = WC_LABELS_ROOT,
     iap_only: bool = True,
 ) -> None:
@@ -232,7 +232,7 @@ def chips_make_split(
     thinning already happened at ``ingest-chips`` time.
 
     --species: species names (exact match) to include. Omit for all.
-    --class-map-name: a class_maps entry in the schema YAML (e.g. "upper_berg_12").
+    --class-map-name: a class_maps entry in the schema YAML (e.g. "western_cape_iap").
                       Adds a class_id column collapsing species to a shared class
                       (e.g. all Eucalyptus spp → class 5). Unmapped rows dropped
                       unless --species is given.

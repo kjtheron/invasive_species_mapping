@@ -19,8 +19,8 @@ report, viewer).** Each lens is "spine + a head + a metric + a report".
 
 ## Phase 0 goal
 
-A 2.5 m, 4-timestep IAP species map for a Western Cape catchment (upper Berg),
-with per-pixel uncertainty and out-of-distribution novelty flags. Phase 0 is
+A 2.5 m, 3-timestep IAP species map for the Western Cape, with per-pixel
+uncertainty and out-of-distribution novelty flags. Phase 0 is
 **IAP-species-only** — native/background classes are deferred; "not-IAP" is an
 OOD/threshold decision, not a trained class.
 

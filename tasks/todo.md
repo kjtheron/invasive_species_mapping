@@ -24,7 +24,7 @@ No label data is in the store yet. When a cover-bearing dataset arrives:
 1. Write/confirm its adapter (one loader → the observation schema; fill its `source_doi` + `license`).
 2. `uv run cmrv labels-bioscape-ingest` (or the new dataset's verb).
 3. `uv run cmrv labels` — sanity-check per-source counts + cover coverage.
-4. `uv run cmrv ingest-chips` → `chips-stats` → `make-split --class-map-name upper_berg_12`.
+4. `uv run cmrv ingest-chips` → `chips-stats` → `make-split --class-map-name western_cape_iap`.
 
 ---
 
