@@ -923,7 +923,7 @@ def make_split(
         ``None`` = all species in the manifest.
     class_map_name : str | None
         Name of a ``class_maps`` entry in ``schema_path`` (e.g.
-        ``"upper_berg_12"``).  When set, a ``class_id`` column is added by
+        ``"western_cape_iap"``).  When set, a ``class_id`` column is added by
         matching ``manifest.species`` against the ``species_map`` in the
         schema.  Multiple species that share a class_id are thereby collapsed
         to a single training class (e.g. all *Eucalyptus* spp → class 5).

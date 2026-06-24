@@ -125,7 +125,7 @@ def test_real_schema_round_trip():
     schema = repo_root / "configs" / "labels_schema.yaml"
     if not schema.exists():
         pytest.skip("real schema not present")
-    cm = build_lookup(schema, "upper_berg_12")
+    cm = build_lookup(schema, "western_cape_iap")
     assert cm.resolve("Acacia mearnsii") == 0
     assert cm.resolve("Acacia cyclops") == 1
     assert cm.resolve("Pinus halepensis") == 4  # member of pinus_spp

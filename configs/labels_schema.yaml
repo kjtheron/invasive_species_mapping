@@ -22,10 +22,10 @@ nodata: 255
 # ----------------------------------------------------------------------------
 class_maps:
 
-  # 8-class IAP schema for the upper-Berg Phase 0 run.
+  # 8-class IAP schema for the Western Cape Phase 0 run.
   # A. cyclops merged into A. saligna (class 1); three riparian IAPs collapsed
   # into class 7 (data-poor individually; share riparian habitat).
-  upper_berg_12:
+  western_cape_iap:
     0:
       name: acacia_mearnsii
       group: iap_wattle

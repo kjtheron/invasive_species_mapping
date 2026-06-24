@@ -42,7 +42,7 @@ from cmrv.labels.classmap import ClassMap, build_lookup
 from cmrv.labels.observations import WC_LABELS_ROOT, make_run_id, write_source_partition
 
 DEFAULT_SCHEMA_PATH = "configs/labels_schema.yaml"
-DEFAULT_CLASS_MAP = "upper_berg_12"
+DEFAULT_CLASS_MAP = "western_cape_iap"
 
 # ---------------------------------------------------------------------------
 # Data file paths (ORNL DAAC archive layout)

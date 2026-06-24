@@ -11,3 +11,7 @@ __pycache__/
 # Pipeline artifacts (local-first; not committed)
 data/
 logs/
+
+# Data sourcing temp
+pending_dataset_ingest.md
+dataset_lookup.csv
