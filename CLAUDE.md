@@ -35,7 +35,8 @@ Phase 0 runs **locally** — no cloud bucket. All artifacts live under `data/`
 - `data/aoi/` — AOI polygons, tile grid
 - `data/raw/` — S2 L2A 10 m COGs
 - `data/sr/` — SEN2SR 2.5 m COGs
-- `data/labels/wc/obs/source=<src>/` — unified observation store (partitioned Parquet)
+- `data/labels/raw/<dataset>/` — raw downloads (untouched, gitignored)
+- `data/labels/processed/<dataset>/` — unified observation store (partitioned Parquet, mirrors raw)
 - `data/chips/train/` — 64×64 training chips + `manifest.parquet`
 - `data/embeddings/` — Clay Zarr cubes
 - `data/runs/` — checkpoints, MLflow db
@@ -64,21 +65,28 @@ geopandas/pyogrio do all Parquet I/O (no DuckDB). `read_gdf` decodes the WKB +
 
 ## Label sources
 
-Training signal comes only from **plot/transect datasets that measure cover**
-(GBIF/iNat occurrence points are dropped — a lone-tree GPS point is a mixed
-2.5 m pixel). One **adapter per scientific dataset**, all emitting the unified
-observation schema:
+Training signal comes from **field datasets that measure cover/density**
+(occurrence points without abundance — GBIF/iNat — are dropped; a lone-tree GPS
+point is a mixed 2.5 m pixel). Raw downloads live in `data/labels/raw/<dataset>/`;
+one **adapter per scientific dataset** writes the unified schema to
+`data/labels/processed/<dataset>/` (mirrors raw):
 
-1. **BioSCape** (`cmrv labels-bioscape-ingest`) — Berg+Eerste VegPlots field
-   plots; the figshare *BioSCape Raw Training Dataset* when released.
-2. Future journal/field datasets — add a sibling `labels-<dataset>-ingest` verb
-   (a small loader mapping the source's columns → the schema). No data is
-   present yet; don't hardcode dataset DOI/license/names — leave them null + TODO.
+1. **BioSCape VegPlots** (`cmrv labels-bioscape-ingest`) — Berg+Eerste field
+   plots, per-species cover %. **Species-level** labels (`taxon_rank=species`).
+2. **MapWAPS Olifants-Doring** (`cmrv labels-mapwaps-ingest`) — ~28k field points
+   (NW WC); **genus/functional** labels (Alien_Pine/Gum/Wattle/Prosopis),
+   `Density___` → `cover_pct`. Geometry is already distance/direction corrected.
+3. Future datasets — add a sibling `labels-<dataset>-ingest` verb (a small loader
+   mapping the source's columns → the schema).
+
+Sources differ in label granularity, so each row carries `taxon_rank`. Phase 0
+trains the **genus** class map `western_cape_iap_genus` (Acacia→`acacia_spp`);
+the species map + a hierarchical-loss head is the later upgrade.
 
 Every observation carries provenance + quality fields: `source`, `source_url`,
 `source_doi`, `license`, `coord_uncertainty_m`, `cover_pct`. Training gates on
-`coord_uncertainty_m` (≤40 m at chip time) and, once cover data lands, on
-`cover_pct` (the pure-pixel gate — `load_training_labels(min_cover_pct=…)`).
+`coord_uncertainty_m` (≤40 m at chip time) and, once enabled, on `cover_pct`
+(the pure-pixel gate — `load_training_labels(min_cover_pct=…)`).
 
 **The species list is a single source of truth: `class_maps.<name>.members[]` in
 [configs/labels_schema.yaml](configs/labels_schema.yaml).** Append a binomial to
@@ -97,7 +105,8 @@ provinces). Boundary from **waterresourceswr2012.co.za** (free registration):
 `uv run cmrv <verb>`. Label flow:
 
 ```
-labels-bioscape-ingest → BioSCape field plots into the obs store (one adapter per source)
+labels-bioscape-ingest → BioSCape field plots into the obs store (one adapter per dataset)
+labels-mapwaps-ingest  → MapWAPS Olifants-Doring field points into the obs store
 labels                 → inspect the store (per-source counts + coverage); optional AOI/species preview
 ingest-chips           → thin → 64×64 chip per (obs_id, month); writes manifest.parquet
 chips-stats            → species × spatial × temporal stats from the manifest

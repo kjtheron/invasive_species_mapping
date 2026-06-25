@@ -19,8 +19,9 @@ from cmrv.ingest.chips import (
 from cmrv.ingest.composite import load_pipeline_config, run_ingest
 from cmrv.io import read_gdf, write_gdf_parquet
 from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
+from cmrv.labels.mapwaps import ingest_mapwaps
 from cmrv.labels.merge import load_training_labels, merge_partitions
-from cmrv.labels.observations import WC_LABELS_ROOT
+from cmrv.labels.observations import PROCESSED_ROOT
 
 
 def aoi_wc(
@@ -58,7 +59,7 @@ def aoi_tiles(
 def labels_bioscape_ingest(
     schema: str = "configs/labels_schema.yaml",
     class_map: str = "western_cape_iap",
-    root: str = WC_LABELS_ROOT,
+    root: str = PROCESSED_ROOT,
     iap_only: bool = True,
 ) -> None:
     """Ingest BioSCape VegPlots (Berg+Eerste) → unified observation store.
@@ -66,7 +67,7 @@ def labels_bioscape_ingest(
     Writes ``source=bioscape_line`` + ``source=bioscape_plot`` partitions.
     IAP membership decided from the class-map ``members[]``. CSV paths default
     to the ORNL DAAC archive layout under
-    ``data/labels/BioSCape_VegPlots_Berg_Eerste_2425/``.
+    ``data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/``.
 
     One adapter per scientific dataset — add a sibling ``labels-<dataset>-ingest``
     verb for each new source, all emitting the same observation schema.
@@ -80,12 +81,25 @@ def labels_bioscape_ingest(
     logger.success("bioscape ingest complete — line={} plot={}", line_path, plot_path)
 
 
+def labels_mapwaps_ingest(
+    root: str = PROCESSED_ROOT,
+) -> None:
+    """Ingest MapWAPS Olifants-Doring training points → store (source=mapwaps).
+
+    Keeps all 23 LULC classes; IAP labels are genus-level (Alien_Pine/Gum/Wattle/
+    Prosopis). Crosswalk at make-split via ``--class-map-name western_cape_iap_genus``.
+    Geometry used as-is (already distance/direction corrected upstream).
+    """
+    path = ingest_mapwaps(root=root)
+    logger.success("mapwaps ingest complete — {}", path)
+
+
 def labels_inspect(
     aoi: str | None = None,
     species: list[str] | None = None,
     out: str | None = None,
-    root: str = WC_LABELS_ROOT,
-    summary_out: str = "data/labels/wc/summary.parquet",
+    root: str = PROCESSED_ROOT,
+    summary_out: str = "data/labels/processed/summary.parquet",
     max_coord_uncertainty_m: float = 500.0,
     date_min: str = "2018-01-01",
 ) -> None:
@@ -144,7 +158,7 @@ def ingest_chips(
     aoi: str = "data/aoi/western_cape.parquet",
     pipeline: str = "configs/pipeline.yaml",
     out_prefix: str = "data/chips/train",
-    root: str = WC_LABELS_ROOT,
+    root: str = PROCESSED_ROOT,
     block_km: float = 10.0,
     thin_m: float = 20.0,
     max_coord_uncertainty_m: float = 40.0,
@@ -331,6 +345,7 @@ def main() -> None:
             "aoi-wc": aoi_wc,
             "aoi-tiles": aoi_tiles,
             "labels-bioscape-ingest": labels_bioscape_ingest,
+            "labels-mapwaps-ingest": labels_mapwaps_ingest,
             "labels": labels_inspect,
             "chips-stats": chips_stats,
             "ingest-month": ingest_month,

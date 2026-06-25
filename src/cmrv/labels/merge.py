@@ -19,7 +19,7 @@ from loguru import logger
 from shapely import from_wkb
 
 from cmrv.io import read_gdf
-from cmrv.labels.observations import WC_LABELS_ROOT, read_all, write_summary
+from cmrv.labels.observations import PROCESSED_ROOT, read_all, write_summary
 
 
 def _dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
@@ -28,8 +28,8 @@ def _dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def merge_partitions(
-    root: str = WC_LABELS_ROOT,
-    summary_uri: str = "data/labels/wc/summary.parquet",
+    root: str = PROCESSED_ROOT,
+    summary_uri: str = "data/labels/processed/summary.parquet",
 ) -> pd.DataFrame:
     """Union all source partitions, deduplicate on obs_id, write summary.
 
@@ -58,7 +58,7 @@ def load_training_labels(
     geom_types: list[str] | None = None,
     min_weight: float | None = None,
     min_cover_pct: float | None = None,
-    root: str = WC_LABELS_ROOT,
+    root: str = PROCESSED_ROOT,
 ) -> gpd.GeoDataFrame:
     """Load training labels filtered to an AOI and optional species subset.
 

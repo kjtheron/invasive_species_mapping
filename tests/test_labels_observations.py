@@ -14,7 +14,7 @@ from shapely.geometry import Point
 from cmrv.labels.observations import (
     COLUMNS,
     gdf_to_obs_df,
-    write_source_partition,
+    write_partition,
 )
 
 
@@ -65,10 +65,10 @@ def test_upsert_same_obs_id_keeps_latest() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
 
-        write_source_partition(gdf_first, "bioscape_plot", root=root, run_id="run1")
-        write_source_partition(gdf_second, "bioscape_plot", root=root, run_id="run2")
+        write_partition(gdf_first, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
+        write_partition(gdf_second, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run2")
 
-        files = list(Path(f"{root}/source=bioscape_plot").glob("*.parquet"))
+        files = list(Path(f"{root}/BioSCape_VegPlots_Berg_Eerste_2425").glob("*.parquet"))
         assert len(files) == 1, "should be exactly one partition file after upsert"
 
         df = pd.read_parquet(str(files[0]))
@@ -88,9 +88,9 @@ def test_upsert_distinct_obs_ids_both_retained() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_source_partition(gdf, "bioscape_plot", root=root, run_id="run1")
+        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
 
-        files = list(Path(f"{root}/source=bioscape_plot").glob("*.parquet"))
+        files = list(Path(f"{root}/BioSCape_VegPlots_Berg_Eerste_2425").glob("*.parquet"))
         df = pd.read_parquet(str(files[0]))
         assert len(df) == 2
 
@@ -105,10 +105,10 @@ def test_upsert_idempotent() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_source_partition(gdf, "bioscape_plot", root=root, run_id="run1")
-        write_source_partition(gdf, "bioscape_plot", root=root, run_id="run2")
+        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
+        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run2")
 
-        files = list(Path(f"{root}/source=bioscape_plot").glob("*.parquet"))
+        files = list(Path(f"{root}/BioSCape_VegPlots_Berg_Eerste_2425").glob("*.parquet"))
         df = pd.read_parquet(str(files[0]))
         assert len(df) == 2, "re-ingest of same rows should remain at 2"
 

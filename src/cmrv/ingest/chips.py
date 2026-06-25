@@ -1,7 +1,7 @@
 """Sparse training-chip extraction — temporally aligned to label dates.
 
 For each label point, extracts a 64x64 px (10 m) chip for each configured
-season month from the label's observation year. The 4-month temporal stack
+season month from the label's observation year. The multi-month temporal stack
 feeds SR -> Clay -> temporal head.
 
 Spatial blocks (not inference tiles) serve dual purpose:
@@ -252,7 +252,7 @@ def temporal_windows(
 ) -> list[dict]:
     """Map month templates onto a label's observation year.
 
-    All four months (jan, apr, aug, oct) are taken from the label year
+    All configured season months (Feb/May/Sep) are taken from the label year
     itself — no cross-year offset. Each window is widened by
     ``padding_days`` on each side to give the median composite more
     candidate scenes (helps in cloudy months).

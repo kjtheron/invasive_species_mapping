@@ -34,9 +34,10 @@ datasets (see below).
 ## Label pipeline
 
 ```
-labels-bioscape-ingest  Load BioSCape field plots into the unified observation
-                        store (data/labels/wc/obs/source=<src>/). One adapter per
-                        scientific dataset — add labels-<dataset>-ingest as more land.
+labels-bioscape-ingest  BioSCape field plots (species-level, cover %) and
+labels-mapwaps-ingest   MapWAPS Olifants-Doring field points (~28k, genus-level,
+                        Density→cover) → unified store data/labels/processed/<dataset>/
+                        (mirrors raw/). One adapter per dataset.
       ↓
 labels                  Inspect the store: per-source counts + coord-uncertainty /
                         cover coverage. With --aoi/--species, preview the filtered
@@ -62,7 +63,8 @@ make-split              Filter by --species (optional), assign train/val/test fo
 |---|---|
 | `aoi-wc` | Build the Western Cape province polygon (the AOI). |
 | `aoi-tiles` | Build the 10 km UTM-34S tile grid (inference unit). |
-| `labels-bioscape-ingest` | BioSCape VegPlots (line + plot) → `source=bioscape_line/` + `source=bioscape_plot/`. |
+| `labels-bioscape-ingest` | BioSCape VegPlots (line + plot, species-level) → `processed/BioSCape_VegPlots_Berg_Eerste_2425/`. |
+| `labels-mapwaps-ingest` | MapWAPS Olifants-Doring (~28k field points, genus-level) → `processed/mapwaps_olifants_doring/`. |
 | `labels` | Inspect the obs store (counts + coverage); `--aoi`/`--species` previews filtered labels, `--out` writes them. |
 | `ingest-month` | MPC STAC → SCL mask → monthly median → per-tile 10 m COG (inference imagery). |
 | `ingest-chips` | Thin, then 64×64 chips per (obs_id, month); manifest-based incremental resume. |
