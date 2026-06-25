@@ -86,6 +86,81 @@ class_maps:
         - "Populus alba"
         - "Populus canescens"
         - "Sesbania punicea"
+    8:
+      name: prosopis_spp             # mesquite — genus-level (MapWAPS Alien_Prosopis)
+      group: iap_prosopis
+      weight_base: 1.0
+      members:
+        - "Prosopis glandulosa"
+        - "Prosopis velutina"
+        - "Prosopis juliflora"
+        - "Prosopis chilensis"
+      genus_fallback: true
+      genus: prosopis
+
+  # --------------------------------------------------------------------------
+  # Genus-level collapse for Phase 0. MapWAPS labels are genus/functional only
+  # (Alien_Pine/Gum/Wattle/Prosopis), so the species-level Acacia split can't be
+  # honoured across sources. Acacia → acacia_spp. Flip to western_cape_iap +
+  # hierarchical loss once enough species-level data lands.
+  western_cape_iap_genus:
+    0:
+      name: acacia_spp
+      group: iap_wattle
+      weight_base: 1.0
+      members:
+        - "Acacia mearnsii"
+        - "Acacia saligna"
+        - "Acacia cyanophylla"
+        - "Acacia cyclops"
+        - "Acacia melanoxylon"
+        - "Acacia longifolia"
+      genus_fallback: true
+      genus: acacia
+    1:
+      name: pinus_spp
+      group: iap_pine
+      weight_base: 1.0
+      members:
+        - "Pinus pinaster"
+        - "Pinus radiata"
+        - "Pinus halepensis"
+      genus_fallback: true
+      genus: pinus
+    2:
+      name: eucalyptus_spp
+      group: iap_euc
+      weight_base: 1.0
+      members:
+        - "Eucalyptus camaldulensis"
+        - "Eucalyptus globulus"
+      genus_fallback: true
+      genus: eucalyptus
+    3:
+      name: hakea_spp
+      group: iap_proteoid
+      weight_base: 1.0
+      members:
+        - "Hakea sericea"
+      genus_fallback: true
+      genus: hakea
+    4:
+      name: prosopis_spp
+      group: iap_prosopis
+      weight_base: 1.0
+      members:
+        - "Prosopis glandulosa"
+        - "Prosopis velutina"
+      genus_fallback: true
+      genus: prosopis
+    5:
+      name: iap_riparian
+      group: iap_riparian
+      weight_base: 0.9
+      members:
+        - "Leptospermum laevigatum"
+        - "Populus alba"
+        - "Sesbania punicea"
 
 # ----------------------------------------------------------------------------
 # BioSCape VegPlots (Berg + Eerste, 2022–2023) — field plots.
@@ -93,8 +168,8 @@ class_maps:
 # IAP membership decided from class_maps.<name>.members[].
 # ----------------------------------------------------------------------------
 bioscape_vegplots:
-  site_csv: data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_SiteData.csv
-  plot_cover_csv: data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_PlotCoverage.csv
-  line_intercept_csv: data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_LineIntercept.csv
+  site_csv: data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_SiteData.csv
+  plot_cover_csv: data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_PlotCoverage.csv
+  line_intercept_csv: data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_LineIntercept.csv
   dominant_cover_min: 40        # species with cover ≥40% promoted to plot label
   weight: 0.95                  # highest — field-expert identified

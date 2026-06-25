@@ -14,7 +14,7 @@ Two emitters (distinct ``source`` values in the unified store):
     weight = 0.95 when IAP cover ≥ 40 %; 0.5 when present but minor.
 
 Both loaders:
-- Emit the unified ``observations.SCHEMA`` via ``write_source_partition``.
+- Emit the unified ``observations.SCHEMA`` via ``write_partition``.
 - Do NOT assign class_id (training config does that via labels_schema.yaml).
 - Decide IAP membership from the active class-map ``members[]`` (single source
   of truth in ``configs/labels_schema.yaml``) — no separate NEMBA taxa file.
@@ -39,16 +39,17 @@ from pyproj import Geod
 from shapely.geometry import Point
 
 from cmrv.labels.classmap import ClassMap, build_lookup
-from cmrv.labels.observations import WC_LABELS_ROOT, make_run_id, write_source_partition
+from cmrv.labels.observations import PROCESSED_ROOT, make_run_id, write_partition
 
 DEFAULT_SCHEMA_PATH = "configs/labels_schema.yaml"
 DEFAULT_CLASS_MAP = "western_cape_iap"
+DATASET = "BioSCape_VegPlots_Berg_Eerste_2425"
 
 # ---------------------------------------------------------------------------
 # Data file paths (ORNL DAAC archive layout)
 # ---------------------------------------------------------------------------
 
-BIOSCAPE_DATA_DIR = Path("data/labels/BioSCape_VegPlots_Berg_Eerste_2425/data")
+BIOSCAPE_DATA_DIR = Path("data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data")
 SITE_CSV = BIOSCAPE_DATA_DIR / "Berg_Eerste_Veg_SiteData.csv"
 LINE_CSV = BIOSCAPE_DATA_DIR / "Berg_Eerste_Veg_LineIntercept.csv"
 PLOT_CSV = BIOSCAPE_DATA_DIR / "Berg_Eerste_Veg_PlotCoverage.csv"
@@ -137,7 +138,7 @@ def ingest_lineintercept(
     site_csv: str | Path = SITE_CSV,
     schema_path: str | Path = DEFAULT_SCHEMA_PATH,
     class_map_name: str = DEFAULT_CLASS_MAP,
-    root: str = WC_LABELS_ROOT,
+    root: str = PROCESSED_ROOT,
     run_id: str | None = None,
     iap_only: bool = True,
 ) -> str:
@@ -201,6 +202,7 @@ def ingest_lineintercept(
                 "license": None,  # TODO: fill from dataset metadata
                 "species": sp_raw,
                 "species_normalized": sp_norm,
+                "taxon_rank": "species",
                 "gbif_usage_key": None,
                 "geom_type": "point",
                 "coord_uncertainty_m": LINE_COORD_UNCERTAINTY_M,
@@ -224,7 +226,7 @@ def ingest_lineintercept(
     geom_col = [Point(lo, la) for lo, la in zip(df_rows["lon"], df_rows["lat"], strict=True)]
     gdf = gpd.GeoDataFrame(df_rows.drop(columns=["lon", "lat"]), geometry=geom_col, crs="EPSG:4326")
 
-    out_path = write_source_partition(gdf, source, root=root, run_id=run_id)
+    out_path = write_partition(gdf, DATASET, root=root, run_id=run_id)
     logger.success("bioscape_line: {} rows → {}", len(rows), out_path)
     return out_path
 
@@ -239,7 +241,7 @@ def ingest_plotcoverage(
     site_csv: str | Path = SITE_CSV,
     schema_path: str | Path = DEFAULT_SCHEMA_PATH,
     class_map_name: str = DEFAULT_CLASS_MAP,
-    root: str = WC_LABELS_ROOT,
+    root: str = PROCESSED_ROOT,
     run_id: str | None = None,
     iap_only: bool = True,
 ) -> str:
@@ -318,6 +320,7 @@ def ingest_plotcoverage(
                 "license": None,  # TODO: fill from dataset metadata
                 "species": sp_raw,
                 "species_normalized": sp_norm,
+                "taxon_rank": "species",
                 "gbif_usage_key": None,
                 "geom_type": "point",
                 "coord_uncertainty_m": PLOT_COORD_UNCERTAINTY_M,
@@ -341,6 +344,6 @@ def ingest_plotcoverage(
     geom_col = [Point(lo, la) for lo, la in zip(df_rows["lon"], df_rows["lat"], strict=True)]
     gdf = gpd.GeoDataFrame(df_rows.drop(columns=["lon", "lat"]), geometry=geom_col, crs="EPSG:4326")
 
-    out_path = write_source_partition(gdf, source, root=root, run_id=run_id)
+    out_path = write_partition(gdf, DATASET, root=root, run_id=run_id)
     logger.success("bioscape_plot: {} rows → {}", len(rows), out_path)
     return out_path
