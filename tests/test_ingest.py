@@ -229,3 +229,22 @@ class TestWindowMedians:
         stack = _make_stack(fill=np.nan)  # all-NaN window → valid_frac 0
         cx, cy = float(stack.x.values[4]), float(stack.y.values[4])
         assert _window_medians(stack, [(cx, cy)], chip_px=4)[0].startswith("low_valid_frac")
+
+
+def test_thin_labels_order_independent_and_stable() -> None:
+    """Thinning survivor is the smallest obs_id per cell — independent of input order."""
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    from cmrv.ingest.chips import thin_labels
+
+    pts = gpd.GeoDataFrame(
+        {"obs_id": [f"obs{i}" for i in range(8)], "species_normalized": ["Pinus"] * 8},
+        geometry=[Point(19.0 + 1e-5 * i, -32.0) for i in range(8)],
+        crs="EPSG:4326",
+    )
+    a = set(thin_labels(pts, thin_m=20.0)["obs_id"])
+    b = set(thin_labels(pts.iloc[::-1].reset_index(drop=True), thin_m=20.0)["obs_id"])
+    assert a == b  # independent of input row order
+    assert "obs0" in a  # survivor = smallest obs_id in the cell
+    assert len(a) < 8  # near-duplicates collapsed

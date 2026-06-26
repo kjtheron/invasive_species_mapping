@@ -860,7 +860,6 @@ def _write_split_files(manifest: pd.DataFrame, out_prefix: str) -> None:
 def thin_labels(
     labels: gpd.GeoDataFrame,
     thin_m: float,
-    seed: int = 42,
     epsg: int = 32734,
     species_col: str = "species_normalized",
 ) -> gpd.GeoDataFrame:
@@ -869,19 +868,22 @@ def thin_labels(
     Snaps each label's UTM coordinate to a ``thin_m`` grid and keeps a single
     label per ``(species, cell)`` — removing near-duplicates the embedding can't
     distinguish (20 m = Clay patch footprint at 2.5 m) *before* any imagery is
-    fetched, so we never download chips we'd discard. ``seed`` picks the survivor.
+    fetched, so we never download chips we'd discard.
+
+    The survivor is the smallest ``obs_id`` in the cell, so thinning is
+    **deterministic and stable**: independent of input row order and of which
+    other species are loaded. A re-run with a different ``--species`` set keeps
+    the same points for a given species, so chips are never orphaned.
     """
     if thin_m <= 0 or labels.empty:
         return labels
     utm = labels.to_crs(f"EPSG:{epsg}")
     cell_x = (utm.geometry.x // thin_m).astype(int).to_numpy()
     cell_y = (utm.geometry.y // thin_m).astype(int).to_numpy()
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(len(labels))
     keep = (
         labels.assign(_cx=cell_x, _cy=cell_y)
-        .iloc[order]
-        .drop_duplicates(subset=[species_col, "_cx", "_cy"])
+        .sort_values("obs_id", kind="stable")
+        .drop_duplicates(subset=[species_col, "_cx", "_cy"], keep="first")
         .drop(columns=["_cx", "_cy"])
     )
     logger.info("spatial thin ({}m): {} → {} labels", int(thin_m), len(labels), len(keep))
