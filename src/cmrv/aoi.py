@@ -1,55 +1,126 @@
-"""AOI utilities: Western Cape province boundary + tile grid (scales to SA later)."""
+"""AOI utilities: Western Cape province boundary + tile grid (scales to SA later).
+
+Boundary source: **GeoBoundaries gbOpen ADM1** (provinces), CC-BY 4.0
+(Runfola et al. 2020). Downloaded + cached under ``data/aoi/``; pass a local
+``source`` file to override.
+"""
 
 from __future__ import annotations
 
+import json
+import urllib.request
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 from loguru import logger
+from shapely import get_coordinates, make_valid
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-SA_PROVINCIAL_SHP = Path("data/aoi/SA_Provincial_bnd_dd.shp")
+GEOBOUNDARIES_API = "https://www.geoboundaries.org/api/current/gbOpen/{iso3}/{adm}/"
+GEOBOUNDARIES_RAW = (
+    "https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/"
+    "gbOpen/{iso3}/{adm}/geoBoundaries-{iso3}-{adm}.geojson"
+)
+ZAF_ADM1_CACHE = Path("data/aoi/geoBoundaries-ZAF-ADM1.geojson")
 
 WC_PROVINCE_NAME = "Western Cape"
 WC_BUFFER_M = 1_000.0
+# Prince Edward Islands are administratively WC but ~2000 km offshore (~-46.9°S);
+# drop anything south of this so the tile grid doesn't span the ocean.
+MAINLAND_MIN_LAT = -35.0
+
+
+def _urlopen(url: str, timeout: float):
+    req = urllib.request.Request(url, headers={"User-Agent": "catchment-mrv"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def fetch_geoboundaries_adm1(
+    iso3: str = "ZAF",
+    adm: str = "ADM1",
+    cache: str | Path = ZAF_ADM1_CACHE,
+) -> gpd.GeoDataFrame:
+    """Download + cache the GeoBoundaries gbOpen ADM1 (province) layer (CC-BY 4.0)."""
+    cache = Path(cache)
+    if cache.exists():
+        logger.info("using cached boundaries {}", cache)
+        return gpd.read_file(cache)
+
+    try:
+        meta_url = GEOBOUNDARIES_API.format(iso3=iso3, adm=adm)
+        logger.info("fetching GeoBoundaries metadata {}", meta_url)
+        with _urlopen(meta_url, timeout=60) as r:
+            gj_url = json.load(r)["gjDownloadURL"]
+    except Exception as e:  # API hiccup → fall back to the canonical raw URL
+        logger.warning("GeoBoundaries API failed ({}); using direct raw URL", e)
+        gj_url = GEOBOUNDARIES_RAW.format(iso3=iso3, adm=adm)
+
+    logger.info("downloading {}", gj_url)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with _urlopen(gj_url, timeout=120) as r:
+        cache.write_bytes(r.read())
+    return gpd.read_file(cache)
+
+
+def _n_vertices(geom) -> int:
+    return len(get_coordinates(geom))
 
 
 def fetch_western_cape(
-    source: str | Path = SA_PROVINCIAL_SHP,
+    source: str | Path | None = None,
     buffer_m: float = WC_BUFFER_M,
+    simplify_m: float = 100.0,
     out_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
-    """Extract the Western Cape province polygon from the SA provincial boundary shapefile.
+    """Western Cape province polygon from GeoBoundaries gbOpen ADM1 (or a local ``source``).
 
-    Filters ``PROVINCE == "Western Cape"``, dissolves multi-part geometry, and
-    applies a +1 km buffer in UTM 34S (metric) before returning in ``out_crs``.
+    Cleans the raw boundary: make-valid, drop the sub-Antarctic Prince Edward
+    Islands (admin'd to WC but ~2000 km offshore), simplify vertices
+    (``simplify_m`` metres, in UTM 34S), dissolve, then a +``buffer_m`` buffer.
+    Returns one feature in ``out_crs``.
     """
-    src = Path(source)
-    if not src.exists():
-        raise FileNotFoundError(f"Provincial boundary source not found: {src}")
-    logger.info("loading provincial boundaries from {}", src)
-    gdf = gpd.read_file(src)
-    wc = gdf[gdf["PROVINCE"] == WC_PROVINCE_NAME]
+    gdf = gpd.read_file(source) if source else fetch_geoboundaries_adm1()
+    name_col = "shapeName" if "shapeName" in gdf.columns else "PROVINCE"
+    match = gdf[name_col].astype(str).str.strip().str.lower() == WC_PROVINCE_NAME.lower()
+    wc = gdf[match]
     if wc.empty:
         raise ValueError(
-            f"no features with PROVINCE == {WC_PROVINCE_NAME!r} in {src}; "
-            f"saw {sorted(gdf['PROVINCE'].unique())}"
+            f"no {WC_PROVINCE_NAME!r} in column {name_col!r}; "
+            f"saw {sorted(gdf[name_col].astype(str).unique())}"
         )
-    if wc.crs is None:
-        wc = wc.set_crs("EPSG:4148")
-    wc_m = wc.to_crs("EPSG:32734")
-    dissolved = unary_union(wc_m.geometry)
+    wc = wc.set_crs("EPSG:4326") if wc.crs is None else wc.to_crs("EPSG:4326")
+
+    # --- clean vertices ---
+    parts = wc.explode(index_parts=False, ignore_index=True)
+    parts["geometry"] = parts.geometry.apply(make_valid)
+    n_parts = len(parts)
+    parts = parts[parts.geometry.representative_point().y > MAINLAND_MIN_LAT]
+    if len(parts) < n_parts:
+        logger.info("dropped {} far-offshore part(s) (Prince Edward Is.)", n_parts - len(parts))
+
+    wc_m = parts.to_crs("EPSG:32734")
+    dissolved = make_valid(unary_union(wc_m.geometry))
+    nv_before = _n_vertices(dissolved)
+    if simplify_m > 0:
+        dissolved = make_valid(dissolved.simplify(simplify_m, preserve_topology=True))
     buffered = dissolved.buffer(buffer_m) if buffer_m > 0 else dissolved
-    out = gpd.GeoDataFrame(
+
+    area_km2 = gpd.GeoSeries([buffered], crs="EPSG:32734").area.iloc[0] / 1e6
+    logger.info(
+        "Western Cape: vertices {} → {} (simplify {} m), area {:.0f} km^2, buffer {:.0f} m",
+        nv_before,
+        _n_vertices(buffered),
+        simplify_m,
+        area_km2,
+        buffer_m,
+    )
+    return gpd.GeoDataFrame(
         {"name": [WC_PROVINCE_NAME], "admin1_iso": ["ZA-WC"]},
         geometry=[buffered],
         crs="EPSG:32734",
     ).to_crs(out_crs)
-    area_km2 = gpd.GeoSeries([buffered], crs="EPSG:32734").area.iloc[0] / 1e6
-    logger.info("Western Cape polygon: area = {:.0f} km^2 (buffer = {:.0f} m)", area_km2, buffer_m)
-    return out
 
 
 def build_tile_grid(

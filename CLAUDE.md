@@ -97,8 +97,11 @@ it's applied at `make-split` time via `--class-map`.
 ## AOI boundary data
 
 The AOI is the **Western Cape province** (scales to SA later by dissolving more
-provinces). Boundary from **waterresourceswr2012.co.za** (free registration):
-- `data/aoi/SA_Provincial_bnd_dd.shp` — SA provincial boundaries (field `PROVINCE`, EPSG:4148)
+provinces). Boundary auto-downloaded from **GeoBoundaries gbOpen ADM1** (CC-BY 4.0)
+by `cmrv aoi-wc` — no manual download. Cleaned on ingest: make-valid, drop the
+offshore Prince Edward Islands, simplify vertices (`--simplify-m`), +1 km buffer;
+cached at `data/aoi/geoBoundaries-ZAF-ADM1.geojson`. Pass `--source <file>` for a
+local boundary instead.
 
 ## Pipeline verbs
 

@@ -9,7 +9,7 @@ import geopandas as gpd
 import tyro
 from loguru import logger
 
-from cmrv.aoi import SA_PROVINCIAL_SHP, build_tile_grid, fetch_western_cape
+from cmrv.aoi import build_tile_grid, fetch_western_cape
 from cmrv.ingest.chips import (
     build_spatial_blocks,
     extract_training_chips,
@@ -26,16 +26,22 @@ from cmrv.labels.observations import PROCESSED_ROOT
 
 def aoi_wc(
     out: str = "data/aoi/western_cape.parquet",
-    source: str = str(SA_PROVINCIAL_SHP),
+    source: str | None = None,
     buffer_m: float = 1000.0,
+    simplify_m: float = 100.0,
     target_crs: str = "EPSG:4326",
 ) -> None:
-    """Extract the Western Cape province polygon, buffer, and write as GeoParquet.
+    """Build the Western Cape province polygon from GeoBoundaries (gbOpen ADM1) → GeoParquet.
 
-    Source shapefile from waterresourceswr2012.co.za (free registration required).
-    Scaling to SA later = dissolve all provinces (same machinery, bigger polygon).
+    Downloads SA provinces from GeoBoundaries (CC-BY 4.0; cached under data/aoi/),
+    filters Western Cape, cleans vertices (make-valid, drops the offshore Prince
+    Edward Islands, simplifies by --simplify-m), buffers by --buffer-m. Pass
+    --source <file> to use a local boundary file instead. Scaling to SA later =
+    dissolve all provinces (same machinery, bigger polygon).
     """
-    gdf = fetch_western_cape(source=source, buffer_m=buffer_m, out_crs=target_crs)
+    gdf = fetch_western_cape(
+        source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=target_crs
+    )
     area_km2 = gdf.to_crs("EPSG:32734").area.sum() / 1e6
     logger.info("Western Cape AOI: {} feature, area = {:.0f} km^2", len(gdf), area_km2)
     write_gdf_parquet(gdf, out)

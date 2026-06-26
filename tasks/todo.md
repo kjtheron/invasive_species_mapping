@@ -28,20 +28,39 @@ No label data is in the store yet. When a cover-bearing dataset arrives:
 
 ---
 
-## Next — Stage 5: SEN2SR Super-Resolution (10 m → 2.5 m)
+## Active — Stage 5–6: Embedding bakeoff (Clay+SR vs UniverSat)
 
-Package `sen2sr` (`uv add sen2sr mlstac`), model `tacofoundation/RS-SR-LTDF` via `mlstac.download()`.
-Input `B × 10 × 128×128`, output 4× upsampled; `sen2sr.predict_large(model, X, overlap=16)` for larger.
+Pick the embedding backend **before** building the spine's embed stage. Keep it
+**encoder-agnostic** so the loser is a clean delete.
 
-- [ ] `src/cmrv/sr/sen2sr.py`: `download_model`, `load_model`, `prepare_input`, `super_resolve_tile`
-- [ ] `cmrv super-resolve` CLI — `data/raw/` → `data/sr/`
-- [ ] QC: PSNR ≥ bicubic + 2 dB
+**Interface (so Clay+SR is removable):** an `Embedder` protocol —
+`embed(stack[T,C,H,W], dates) -> np.ndarray[N, D]`. All SEN2SR code lives *inside*
+the Clay backend; adopting UniverSat = delete `sr/` + the Clay backend, flip the
+default. Chips / manifest / make-split stay untouched (already encoder-agnostic).
 
-## Next — Stage 6: Clay Embedding Extraction
+Backends:
+- **ClaySR** — SEN2SR (`tacofoundation/RS-SR-LTDF`) 10 m→2.5 m → frozen Clay v1.5
+  (patch 8 → 32×32 tokens). The SR stage exists only to feed Clay fine pixels.
+- **UniverSat** (`g-astruc/UniverSat`, MIT, ~201 M, 768-d) — ingests native 10 m S2
+  time-series + dates directly (no SR), `output_grid` set at inference; subsumes the
+  temporal head. Our 64×64@10 m chips feed it as `(B, T=3, 10, 64, 64)` as-is.
 
-- [ ] `src/cmrv/embeddings/clay.py` — frozen Clay v1.5, batch ≥32, band order + wavelength metadata
-- [ ] Chain composite → SR → Clay; persist **embeddings** (Zarr cube) as the durable artifact; chips/SR are transient cache
-- [ ] Embedding manifest (sample → shard/offset, label, cover, fold). Patch math: 64px@10m → 256px@2.5m → 32×32 patches
+Protocol (does **not** need the province AOI — uses the labels' own extent):
+- [ ] Pull a small real-S2 chip set for the stored labels (label-bbox AOI, Planetary Computer)
+- [ ] `Embedder` interface + both backends (`uv add` torch + clay + sen2sr + universat)
+- [ ] Embed all chips with both; linear probe on `western_cape_iap_genus`; compare macro-F1 / separability
+- [ ] Decide → if UniverSat wins: delete `sr/` + Clay backend, set UniverSat default, update roadmap + docs
+
+**VHR / resolution decision:** spine stays **S2-only (train + inference)** — temporal
+consistency, no SR, UniverSat already wins on S2 alone. NGI 0.25 m ortho is free but
+flown every 3–5 yr (static snapshot) → temporally misaligned with S2, unusable as an
+inference input. SPOT 6/7 (1.5 m, **annual** SANSA mosaic, free for research) is the
+better VHR *if* ever pursued — training-only enrichment via UniverSat's missing-modality
+inference, deferred + validated separately.
+
+## Embedding store (after backend chosen)
+- [ ] Persist **embeddings** (Zarr cube) as the durable artifact; chips are transient cache
+- [ ] Embedding manifest (sample → shard/offset, label, cover, fold)
 
 ## Deferred (designed, not built)
 

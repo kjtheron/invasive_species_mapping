@@ -1,0 +1,48 @@
+"""UniverSat embedding backend — native 10 m S2, no super-resolution.
+
+Wraps ``g-astruc/UniverSat`` (torch.hub, MIT, ~201 M, 768-d). Smoke-validated:
+our ``(B, T=3, 10, 64, 64)`` chips feed in directly and return a dense token
+grid, which we mean-pool to one vector per chip.
+
+Requires the ``embed`` dependency group (``torch`` + torch.hub deps).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+from cmrv.embeddings.base import Embedder
+
+
+class UniverSatEmbedder(Embedder):
+    name = "universat"
+
+    def __init__(
+        self,
+        device: str = "cpu",
+        patch_size: int = 40,
+        output_grid: int = 9,
+        repo: str = "gastruc/UniverSat",
+        batch: int = 8,
+    ) -> None:
+        self.device = device
+        self.patch_size = patch_size
+        self.output_grid = output_grid
+        self.batch = batch
+        self.model = torch.hub.load(repo, "from_pretrained", trust_repo=True).eval().to(device)
+
+    @torch.no_grad()
+    def embed(self, stacks: np.ndarray, dates: np.ndarray) -> np.ndarray:
+        out = []
+        for i in range(0, len(stacks), self.batch):
+            s = torch.as_tensor(stacks[i : i + self.batch], dtype=torch.float32, device=self.device)
+            d = torch.as_tensor(dates[i : i + self.batch], dtype=torch.long, device=self.device)
+            feats = self.model.encode(
+                {"s2": s, "s2_dates": d},
+                patch_size=self.patch_size,
+                output_grid=self.output_grid,
+            )
+            feats = feats[0] if isinstance(feats, (tuple, list)) else feats  # (b, L, D)
+            out.append(feats.mean(dim=1).cpu().numpy())  # mean-pool tokens → (b, D)
+        return np.concatenate(out, axis=0).astype("float32")
