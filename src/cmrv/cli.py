@@ -25,7 +25,7 @@ from cmrv.labels.observations import PROCESSED_ROOT
 
 
 def aoi_wc(
-    out: str = "data/aoi/western_cape.parquet",
+    out: str = "data/aoi/processed/western_cape.parquet",
     source: str | None = None,
     buffer_m: float = 1000.0,
     simplify_m: float = 100.0,
@@ -33,7 +33,7 @@ def aoi_wc(
 ) -> None:
     """Build the Western Cape province polygon from GeoBoundaries (gbOpen ADM1) → GeoParquet.
 
-    Downloads SA provinces from GeoBoundaries (CC-BY 4.0; cached under data/aoi/),
+    Downloads SA provinces from GeoBoundaries (CC-BY 4.0; cached under data/aoi/raw/),
     filters Western Cape, cleans vertices (make-valid, drops the offshore Prince
     Edward Islands, simplifies by --simplify-m), buffers by --buffer-m. Pass
     --source <file> to use a local boundary file instead. Scaling to SA later =
@@ -49,9 +49,9 @@ def aoi_wc(
 
 
 def aoi_tiles(
-    aoi: str = "data/aoi/western_cape.parquet",
+    aoi: str = "data/aoi/processed/western_cape.parquet",
     km: float = 10.0,
-    out: str = "data/aoi/tiles.parquet",
+    out: str = "data/aoi/processed/tiles.parquet",
     crs: str = "EPSG:32734",
 ) -> None:
     """Build a square tile grid over the AOI and write as GeoParquet (inference unit)."""
@@ -163,7 +163,7 @@ def ingest_month(
 
 
 def ingest_chips(
-    aoi: str = "data/aoi/western_cape.parquet",
+    aoi: str = "data/aoi/processed/western_cape.parquet",
     pipeline: str = "configs/pipeline.yaml",
     out_prefix: str = "data/chips/train",
     root: str = PROCESSED_ROOT,
@@ -234,7 +234,7 @@ def ingest_chips(
 
 
 def chips_make_split(
-    aoi: str = "data/aoi/western_cape.parquet",
+    aoi: str = "data/aoi/processed/western_cape.parquet",
     manifest: str = "data/chips/train/manifest.parquet",
     out_prefix: str = "data/chips/train",
     species: list[str] | None = None,

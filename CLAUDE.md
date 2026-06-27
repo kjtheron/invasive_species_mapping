@@ -32,7 +32,7 @@ Week-by-week plan: [tasks/todo.md](tasks/todo.md). Accumulated lessons:
 Phase 0 runs **locally** — no cloud bucket. All artifacts live under `data/`
 (gitignored), not `~/.cache/`:
 
-- `data/aoi/` — AOI polygons, tile grid
+- `data/aoi/raw/` — GeoBoundaries ADM1 download; `data/aoi/processed/` — WC polygon + tile grid (Parquet)
 - `data/raw/` — S2 L2A 10 m COGs
 - `data/labels/raw/<dataset>/` — raw downloads (untouched, gitignored)
 - `data/labels/processed/<dataset>/` — unified observation store (partitioned Parquet, mirrors raw)
@@ -99,7 +99,7 @@ The AOI is the **Western Cape province** (scales to SA later by dissolving more
 provinces). Boundary auto-downloaded from **GeoBoundaries gbOpen ADM1** (CC-BY 4.0)
 by `cmrv aoi-wc` — no manual download. Cleaned on ingest: make-valid, drop the
 offshore Prince Edward Islands, simplify vertices (`--simplify-m`), +1 km buffer;
-cached at `data/aoi/geoBoundaries-ZAF-ADM1.geojson`. Pass `--source <file>` for a
+cached at `data/aoi/raw/geoBoundaries-ZAF-ADM1.geojson`. Pass `--source <file>` for a
 local boundary instead.
 
 ## Pipeline verbs
