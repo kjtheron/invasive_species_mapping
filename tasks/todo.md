@@ -64,9 +64,10 @@ inference, deferred + validated separately.
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — Zarr → WebDataset shards; GEE→bucket compositing option for Vertex
 - [ ] Temporal head training (mask missing months) + Mahalanobis OOD + wall-to-wall inference + demo viewer
-- [x] **Native vegetation labels — SANLC + VegMap sampler** (`labels-sanlc-ingest`,
-  `sanlc.py`). SANLC 2022 `SALCC_2` (collapsed) → transformed classes; natural pixels →
-  VegMap 2024 biome (`T_BIOME`); plantation kept separate; pixel-interior gate + 320 m
+- [x] **Native/land-cover labels — SANLC accuracy points + VegMap** (`labels-sanlc-ingest`,
+  `sanlc.py`). Field-verified SANLC 2018/2020/2022 accuracy-assessment points (not the
+  raster) → our classes via `ACC_CLASS_TO_CLASS` (collapsed); natural points → VegMap 2024
+  biome (`T_BIOME`); plantation kept separate; identical points de-duped across years; 320 m
   chip-aware IAP exclusion → `source=sanlc`. Feeds the unified `western_cape_landcover`
-  class map (IAP genera + native biomes + transformed). ~4k native labels, 13 classes.
+  class map (IAP genera + native biomes + transformed). 1,105 WC points, 12 classes.
 - [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)

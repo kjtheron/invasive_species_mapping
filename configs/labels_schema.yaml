@@ -166,10 +166,10 @@ class_maps:
         - "Sesbania punicea"
 
   # --------------------------------------------------------------------------
-  # Unified land-cover map: IAP genera (field) + native biomes (VegMap T_BIOME
-  # on SANLC-natural pixels) + transformed/other (SANLC SALCC_2, collapsed).
-  # Every pixel classified → seamless map. Biome + transformed labels come from
-  # `cmrv labels-sanlc-ingest`; their members are the strings that sampler emits.
+  # Unified land-cover map: IAP genera (field) + native biomes (VegMap T_BIOME)
+  # + transformed/other (collapsed SANLC accuracy-point classes). Every pixel
+  # classified → seamless map. Biome + transformed labels come from
+  # `cmrv labels-sanlc-ingest`; their members are the strings that adapter emits.
   western_cape_landcover:
     # --- IAP genera (field adapters) ---
     0:
@@ -215,7 +215,7 @@ class_maps:
     10: {name: forest,          group: native_biome, members: ["forest"]}
     11: {name: azonal,          group: native_biome, members: ["azonal"]}
     12: {name: grassland,       group: native_biome, members: ["grassland"]}
-    # --- transformed / other (SANLC SALCC_2, collapsed) ---
+    # --- transformed / other (collapsed SANLC accuracy-point classes) ---
     13: {name: built_up,        group: transformed, members: ["built_up"]}
     14: {name: cultivated,      group: transformed, members: ["cultivated"]}
     15: {name: planted_forest,  group: transformed, members: ["planted_forest"]}
