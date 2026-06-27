@@ -132,11 +132,14 @@ def ingest_mapwaps(
     shp_path: str | Path = SHP_PATH,
     root: str = PROCESSED_ROOT,
     run_id: str | None = None,
+    iap_only: bool = True,
 ) -> str:
     """Ingest MapWAPS Olifants-Doring training points → unified store (``source=mapwaps``).
 
-    Keeps **all** points (IAP + native + land-cover); native rows drop out at
-    training time. Geometry used as-is (already corrected), reprojected to 4326.
+    ``iap_only`` (default): keep only the ``Alien_*`` LULC classes (the IAP labels);
+    native / land-cover classes are dropped at ingest — native vegetation comes from
+    SANLC/VegMap, not these incidental survey points. Pass ``iap_only=False`` to
+    ingest all 23 classes. Geometry used as-is (already corrected), reprojected to 4326.
     """
     run_id = run_id or make_run_id(SOURCE)
     ingested_at = dt.datetime.now(tz=dt.UTC)
@@ -144,6 +147,11 @@ def ingest_mapwaps(
     gdf = gpd.read_file(shp_path)
     logger.info("MapWAPS rows: {} (CRS {})", len(gdf), gdf.crs)
     gdf = gdf.to_crs("EPSG:4326")
+
+    if iap_only:
+        n0 = len(gdf)
+        gdf = gdf[gdf["LULC_Class"].astype(str).str.startswith("Alien_")].reset_index(drop=True)
+        logger.info("iap_only: kept {} of {} rows (Alien_* LULC)", len(gdf), n0)
 
     # Single field campaign → fill undated points with the modal observation date
     # so per-label year alignment (event_date.year) holds for all of them.

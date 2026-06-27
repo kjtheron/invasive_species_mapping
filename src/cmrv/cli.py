@@ -89,14 +89,16 @@ def labels_bioscape_ingest(
 
 def labels_mapwaps_ingest(
     root: str = PROCESSED_ROOT,
+    iap_only: bool = True,
 ) -> None:
     """Ingest MapWAPS Olifants-Doring training points → store (source=mapwaps).
 
-    Keeps all 23 LULC classes; IAP labels are genus-level (Alien_Pine/Gum/Wattle/
-    Prosopis). Crosswalk at make-split via ``--class-map-name western_cape_iap_genus``.
-    Geometry used as-is (already distance/direction corrected upstream).
+    IAP-only by default — the ``Alien_*`` LULC classes (genus-level: Alien_Pine/
+    Gum/Wattle/Prosopis); native / land-cover classes are dropped (native
+    vegetation comes from SANLC/VegMap). Pass ``--no-iap-only`` for all 23 classes.
+    Crosswalk at make-split via ``--class-map-name western_cape_iap_genus``.
     """
-    path = ingest_mapwaps(root=root)
+    path = ingest_mapwaps(root=root, iap_only=iap_only)
     logger.success("mapwaps ingest complete — {}", path)
 
 

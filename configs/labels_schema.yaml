@@ -159,7 +159,10 @@ class_maps:
       weight_base: 0.9
       members:
         - "Leptospermum laevigatum"
+        - "Populus × canescens"
+        - "Populus x canescens"
         - "Populus alba"
+        - "Populus canescens"
         - "Sesbania punicea"
 
 # ----------------------------------------------------------------------------
