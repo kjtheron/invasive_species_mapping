@@ -45,6 +45,17 @@ os.environ["CPL_VSIL_CURL_TIMEOUT"] = "60"  # /vsicurl/ read timeout (s)
 os.environ["GDAL_HTTP_MAX_RETRY"] = "2"  # GDAL-level retries (on top of ours)
 os.environ["GDAL_HTTP_RETRY_DELAY"] = "5"
 
+# COG-streaming efficiency for windowed /vsicurl reads (Planetary-Computer recipe):
+# fewer HTTP requests + less redundant bytes when reading 64px windows from many
+# COG scenes per monthly median. Network-bound chipping, so this is the main lever.
+os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"  # no dir-listing req per open
+os.environ["CPL_VSIL_CURL_ALLOWED_EXTENSIONS"] = ".tif"  # don't probe for sidecars
+os.environ["GDAL_HTTP_MULTIPLEX"] = "YES"  # HTTP/2 request multiplexing
+os.environ["GDAL_HTTP_VERSION"] = "2"
+os.environ["GDAL_HTTP_MERGE_CONSECUTIVE_RANGES"] = "YES"  # coalesce nearby byte ranges
+os.environ["VSI_CACHE"] = "TRUE"  # cache COG blocks across the ~30-scene median
+os.environ["GDAL_CACHEMAX"] = "512"  # MB block cache
+
 import dask
 import geopandas as gpd
 import numpy as np
