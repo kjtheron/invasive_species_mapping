@@ -4,15 +4,15 @@
 # training subsets crosswalk (species_normalized → class_id) via
 # class_maps.<name>.<id>.members[] below, applied at `cmrv make-split` time.
 #
-# Phase 0 is IAP-species-only: native / background classes (fynbos, indigenous
-# forest, other land cover) are DEFERRED — "not-IAP" is handled downstream by
-# OOD novelty flagging, not an explicit class. Re-add native sources + classes
-# when NLC / Vegmap are reinstated.
+# Two framings coexist: the IAP-only maps (western_cape_iap, *_genus) where
+# "not-IAP" is left to downstream OOD novelty flagging, and the unified
+# western_cape_landcover map where native biomes (VegMap T_BIOME) + transformed
+# classes (SANLC accuracy points) are explicit — every pixel classified.
 #
-# Single source of truth: each class lists its ``members`` (canonical scientific
-# binomials, plus hybrid spellings/synonyms GBIF backbone resolution may return).
-# ``genus_fallback: true`` collapses any species in ``genus`` into that class —
-# used for pinus_spp + eucalyptus_spp.
+# Single source of truth: each class lists its ``members`` — canonical scientific
+# binomials for IAP classes, or the adapter-emitted biome / land-cover string for
+# native + transformed classes. ``genus_fallback: true`` collapses any species in
+# ``genus`` into that class.
 # ----------------------------------------------------------------------------
 
 nodata: 255
@@ -28,31 +28,21 @@ class_maps:
   western_cape_iap:
     0:
       name: acacia_mearnsii
-      group: iap_wattle
-      weight_base: 1.0
       members: ["Acacia mearnsii", "Racosperma mearnsii"]
     1:
       name: acacia_saligna           # absorbs A. cyclops
-      group: iap_wattle
-      weight_base: 1.0
       members:
         - "Acacia saligna"
         - "Acacia cyanophylla"       # old synonym of saligna
         - "Acacia cyclops"           # merged into class 1
     2:
       name: acacia_melanoxylon
-      group: iap_wattle
-      weight_base: 1.0
       members: ["Acacia melanoxylon"]
     3:
       name: acacia_longifolia
-      group: iap_wattle
-      weight_base: 1.0
       members: ["Acacia longifolia"]
     4:
       name: pinus_spp                # pinaster + radiata + halepensis merged
-      group: iap_pine
-      weight_base: 1.0
       members:
         - "Pinus pinaster"
         - "Pinus radiata"
@@ -61,8 +51,6 @@ class_maps:
       genus: pinus
     5:
       name: eucalyptus_spp
-      group: iap_euc
-      weight_base: 1.0
       members:
         - "Eucalyptus camaldulensis"
         - "Eucalyptus globulus"
@@ -72,13 +60,9 @@ class_maps:
       genus: eucalyptus
     6:
       name: hakea_sericea
-      group: iap_proteoid
-      weight_base: 1.0
       members: ["Hakea sericea"]
     7:
       name: iap_riparian             # Leptospermum + Populus + Sesbania
-      group: iap_riparian
-      weight_base: 0.9
       members:
         - "Leptospermum laevigatum"
         - "Populus × canescens"
@@ -88,8 +72,6 @@ class_maps:
         - "Sesbania punicea"
     8:
       name: prosopis_spp             # mesquite — genus-level (MapWAPS Alien_Prosopis)
-      group: iap_prosopis
-      weight_base: 1.0
       members:
         - "Prosopis glandulosa"
         - "Prosopis velutina"
@@ -106,8 +88,6 @@ class_maps:
   western_cape_iap_genus:
     0:
       name: acacia_spp
-      group: iap_wattle
-      weight_base: 1.0
       members:
         - "Acacia mearnsii"
         - "Acacia saligna"
@@ -119,8 +99,6 @@ class_maps:
       genus: acacia
     1:
       name: pinus_spp
-      group: iap_pine
-      weight_base: 1.0
       members:
         - "Pinus pinaster"
         - "Pinus radiata"
@@ -129,8 +107,6 @@ class_maps:
       genus: pinus
     2:
       name: eucalyptus_spp
-      group: iap_euc
-      weight_base: 1.0
       members:
         - "Eucalyptus camaldulensis"
         - "Eucalyptus globulus"
@@ -138,16 +114,12 @@ class_maps:
       genus: eucalyptus
     3:
       name: hakea_spp
-      group: iap_proteoid
-      weight_base: 1.0
       members:
         - "Hakea sericea"
       genus_fallback: true
       genus: hakea
     4:
       name: prosopis_spp
-      group: iap_prosopis
-      weight_base: 1.0
       members:
         - "Prosopis glandulosa"
         - "Prosopis velutina"
@@ -155,8 +127,6 @@ class_maps:
       genus: prosopis
     5:
       name: iap_riparian
-      group: iap_riparian
-      weight_base: 0.9
       members:
         - "Leptospermum laevigatum"
         - "Populus × canescens"
@@ -174,54 +144,48 @@ class_maps:
     # --- IAP genera (field adapters) ---
     0:
       name: acacia_spp
-      group: iap
       members: ["Acacia mearnsii", "Acacia saligna", "Acacia cyanophylla",
                 "Acacia cyclops", "Acacia melanoxylon", "Acacia longifolia"]
       genus_fallback: true
       genus: acacia
     1:
       name: pinus_spp
-      group: iap
       members: ["Pinus pinaster", "Pinus radiata", "Pinus halepensis"]
       genus_fallback: true
       genus: pinus
     2:
       name: eucalyptus_spp
-      group: iap
       members: ["Eucalyptus camaldulensis", "Eucalyptus globulus"]
       genus_fallback: true
       genus: eucalyptus
     3:
       name: hakea_spp
-      group: iap
       members: ["Hakea sericea"]
       genus_fallback: true
       genus: hakea
     4:
       name: prosopis_spp
-      group: iap
       members: ["Prosopis glandulosa", "Prosopis velutina"]
       genus_fallback: true
       genus: prosopis
     5:
       name: iap_riparian
-      group: iap
       members: ["Leptospermum laevigatum", "Populus canescens", "Populus alba", "Sesbania punicea"]
     # --- native biomes (VegMap T_BIOME) ---
-    6:  {name: fynbos,          group: native_biome, members: ["fynbos"]}
-    7:  {name: succulent_karoo, group: native_biome, members: ["succulent_karoo"]}
-    8:  {name: nama_karoo,      group: native_biome, members: ["nama_karoo"]}
-    9:  {name: albany_thicket,  group: native_biome, members: ["albany_thicket"]}
-    10: {name: forest,          group: native_biome, members: ["forest"]}
-    11: {name: azonal,          group: native_biome, members: ["azonal"]}
-    12: {name: grassland,       group: native_biome, members: ["grassland"]}
+    6:  {name: fynbos,          members: ["fynbos"]}
+    7:  {name: succulent_karoo, members: ["succulent_karoo"]}
+    8:  {name: nama_karoo,      members: ["nama_karoo"]}
+    9:  {name: albany_thicket,  members: ["albany_thicket"]}
+    10: {name: forest,          members: ["forest"]}
+    11: {name: azonal,          members: ["azonal"]}
+    12: {name: grassland,       members: ["grassland"]}
     # --- transformed / other (collapsed SANLC accuracy-point classes) ---
-    13: {name: built_up,        group: transformed, members: ["built_up"]}
-    14: {name: cultivated,      group: transformed, members: ["cultivated"]}
-    15: {name: planted_forest,  group: transformed, members: ["planted_forest"]}
-    16: {name: bare,            group: transformed, members: ["bare"]}
-    17: {name: water,           group: transformed, members: ["water"]}
-    18: {name: wetland,         group: transformed, members: ["wetland"]}
+    13: {name: built_up,        members: ["built_up"]}
+    14: {name: cultivated,      members: ["cultivated"]}
+    15: {name: planted_forest,  members: ["planted_forest"]}
+    16: {name: bare,            members: ["bare"]}
+    17: {name: water,           members: ["water"]}
+    18: {name: wetland,         members: ["wetland"]}
 
 # ----------------------------------------------------------------------------
 # BioSCape VegPlots (Berg + Eerste, 2022–2023) — field plots.

@@ -29,7 +29,6 @@ class ClassMap:
     name: str
     binomial_to_class: dict[str, int] = field(default_factory=dict)
     genus_to_class: dict[str, int] = field(default_factory=dict)
-    class_meta: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def resolve(self, species: str | None) -> int | None:
         """Return the ``class_id`` for a species name, or ``None`` if unmapped.
@@ -77,7 +76,6 @@ def build_lookup(
 def _build_from_members(name: str, cm_block: dict[Any, Any]) -> ClassMap:
     binomial_to_class: dict[str, int] = {}
     genus_to_class: dict[str, int] = {}
-    class_meta: dict[int, dict[str, Any]] = {}
 
     binomial_owners: dict[str, list[int]] = {}
     genus_claims: list[tuple[str, int]] = []
@@ -106,8 +104,6 @@ def _build_from_members(name: str, cm_block: dict[Any, Any]) -> ClassMap:
                 name,
                 class_id,
             )
-
-        class_meta[class_id] = {k: v for k, v in entry.items() if k != "members"}
 
         for m in members:
             key = str(m).lower().strip()
@@ -166,5 +162,4 @@ def _build_from_members(name: str, cm_block: dict[Any, Any]) -> ClassMap:
         name=name,
         binomial_to_class=binomial_to_class,
         genus_to_class=genus_to_class,
-        class_meta=class_meta,
     )
