@@ -24,8 +24,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
 # 3. AOI + tile grid (once)
-uv run cmrv aoi-wc      # WC province, auto-downloads GeoBoundaries → data/aoi/western_cape.parquet
-uv run cmrv aoi-tiles   # 10 km UTM-34S tile grid → data/aoi/tiles.parquet
+uv run cmrv aoi-wc      # WC province, auto-downloads GeoBoundaries → data/aoi/processed/western_cape.parquet
+uv run cmrv aoi-tiles   # 10 km UTM-34S tile grid → data/aoi/processed/tiles.parquet
 ```
 
 No secrets/credentials are needed — label data comes from local scientific

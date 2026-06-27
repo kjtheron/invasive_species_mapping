@@ -1,7 +1,7 @@
 """AOI utilities: Western Cape province boundary + tile grid (scales to SA later).
 
 Boundary source: **GeoBoundaries gbOpen ADM1** (provinces), CC-BY 4.0
-(Runfola et al. 2020). Downloaded + cached under ``data/aoi/``; pass a local
+(Runfola et al. 2020). Downloaded + cached under ``data/aoi/raw/``; pass a local
 ``source`` file to override.
 """
 
@@ -23,7 +23,7 @@ GEOBOUNDARIES_RAW = (
     "https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/"
     "gbOpen/{iso3}/{adm}/geoBoundaries-{iso3}-{adm}.geojson"
 )
-ZAF_ADM1_CACHE = Path("data/aoi/geoBoundaries-ZAF-ADM1.geojson")
+ZAF_ADM1_CACHE = Path("data/aoi/raw/geoBoundaries-ZAF-ADM1.geojson")
 
 WC_PROVINCE_NAME = "Western Cape"
 WC_BUFFER_M = 1_000.0

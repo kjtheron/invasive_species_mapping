@@ -1,5 +1,5 @@
 aoi:
-  path: data/aoi/western_cape.parquet
+  path: data/aoi/processed/western_cape.parquet
   crs_utm: EPSG:32734  # UTM 34S — true-area work for tile grid
   tile_km: 10
 
@@ -28,7 +28,7 @@ s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
 cloud_cover_max: 95
 
 paths:
-  tiles: data/aoi/tiles.parquet
+  tiles: data/aoi/processed/tiles.parquet
   raw_prefix: data/raw
   sr_prefix: data/sr
   labels_prefix: data/labels
