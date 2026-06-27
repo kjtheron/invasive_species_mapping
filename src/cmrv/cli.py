@@ -106,15 +106,17 @@ def labels_mapwaps_ingest(
 def labels_sanlc_ingest(
     n_per_class: int = 500,
     pool: int = 40000,
+    n_blocks: int | None = None,
     root: str = PROCESSED_ROOT,
 ) -> None:
     """Sample native-veg + land-cover labels from SANLC 2022 + VegMap 2024 → store.
 
     Pixel-interior points in the WC AOI: transformed classes from SANLC SALCC_2
     (collapsed), natural pixels by VegMap biome; known-IAP areas excluded. Feeds
-    the unified ``western_cape_landcover`` class map at make-split.
+    the unified ``western_cape_landcover`` class map at make-split. ``--n-blocks N``
+    confines to N random ~10 km blocks (smaller, faster-to-chip first pass).
     """
-    path = ingest_sanlc(n_per_class=n_per_class, pool=pool, root=root)
+    path = ingest_sanlc(n_per_class=n_per_class, pool=pool, n_blocks=n_blocks, root=root)
     logger.success("sanlc ingest complete — {}", path)
 
 
