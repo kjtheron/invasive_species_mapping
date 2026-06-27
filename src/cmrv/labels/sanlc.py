@@ -113,13 +113,19 @@ def _vegmap_biome(points: gpd.GeoDataFrame) -> pd.Series:
 def ingest_sanlc(
     n_per_class: int = 500,
     pool: int = 40000,
+    n_blocks: int | None = None,
     homogeneity_m: float = 40.0,
     iap_buffer_m: float = 320.0,
     root: str = PROCESSED_ROOT,
     run_id: str | None = None,
     seed: int = 42,
 ) -> str:
-    """Sample SANLC/VegMap land-cover labels in the WC AOI → ``source=sanlc`` store."""
+    """Sample SANLC/VegMap land-cover labels in the WC AOI → ``source=sanlc`` store.
+
+    ``n_blocks`` confines sampling to that many random ~10 km blocks — native veg is
+    wall-to-wall, so chipping it touches ~1,200 blocks; bounding the blocks keeps the
+    chip download tractable for a first pass (None = full WC).
+    """
     run_id = run_id or make_run_id(SOURCE)
     ingested_at = dt.datetime.now(tz=dt.UTC)
 
@@ -127,6 +133,19 @@ def ingest_sanlc(
     pts = aoi.geometry.sample_points(pool, rng=seed).explode(index_parts=False, ignore_index=True)
     cand = gpd.GeoDataFrame(geometry=list(pts), crs=aoi.crs)
     logger.info("SANLC sampler: {} candidate points in AOI", len(cand))
+
+    if n_blocks:
+        cm = cand.to_crs(UTM34S)
+        cells = (
+            (cm.geometry.x // 10000).astype(int).astype(str)
+            + "_"
+            + (cm.geometry.y // 10000).astype(int).astype(str)
+        )
+        chosen = set(
+            cells.drop_duplicates().sample(min(n_blocks, cells.nunique()), random_state=seed)
+        )
+        cand = cand[cells.isin(chosen).to_numpy()].reset_index(drop=True)
+        logger.info("confined to {} ~10 km blocks → {} candidates", n_blocks, len(cand))
 
     # SANLC class + pixel-interior gate
     with rasterio.open(SANLC_TIF) as src:
@@ -163,7 +182,7 @@ def ingest_sanlc(
 
     cand = cand.to_crs("EPSG:4326")
     rows = []
-    for i, geom, cls in zip(range(len(cand)), cand.geometry, cand["cls"], strict=True):
+    for i, (geom, cls) in enumerate(zip(cand.geometry, cand["cls"], strict=True)):
         natural = cls in NATURAL_CLASSES
         rows.append(
             {
