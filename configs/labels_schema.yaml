@@ -165,6 +165,64 @@ class_maps:
         - "Populus canescens"
         - "Sesbania punicea"
 
+  # --------------------------------------------------------------------------
+  # Unified land-cover map: IAP genera (field) + native biomes (VegMap T_BIOME
+  # on SANLC-natural pixels) + transformed/other (SANLC SALCC_2, collapsed).
+  # Every pixel classified → seamless map. Biome + transformed labels come from
+  # `cmrv labels-sanlc-ingest`; their members are the strings that sampler emits.
+  western_cape_landcover:
+    # --- IAP genera (field adapters) ---
+    0:
+      name: acacia_spp
+      group: iap
+      members: ["Acacia mearnsii", "Acacia saligna", "Acacia cyanophylla",
+                "Acacia cyclops", "Acacia melanoxylon", "Acacia longifolia"]
+      genus_fallback: true
+      genus: acacia
+    1:
+      name: pinus_spp
+      group: iap
+      members: ["Pinus pinaster", "Pinus radiata", "Pinus halepensis"]
+      genus_fallback: true
+      genus: pinus
+    2:
+      name: eucalyptus_spp
+      group: iap
+      members: ["Eucalyptus camaldulensis", "Eucalyptus globulus"]
+      genus_fallback: true
+      genus: eucalyptus
+    3:
+      name: hakea_spp
+      group: iap
+      members: ["Hakea sericea"]
+      genus_fallback: true
+      genus: hakea
+    4:
+      name: prosopis_spp
+      group: iap
+      members: ["Prosopis glandulosa", "Prosopis velutina"]
+      genus_fallback: true
+      genus: prosopis
+    5:
+      name: iap_riparian
+      group: iap
+      members: ["Leptospermum laevigatum", "Populus canescens", "Populus alba", "Sesbania punicea"]
+    # --- native biomes (VegMap T_BIOME) ---
+    6:  {name: fynbos,          group: native_biome, members: ["fynbos"]}
+    7:  {name: succulent_karoo, group: native_biome, members: ["succulent_karoo"]}
+    8:  {name: nama_karoo,      group: native_biome, members: ["nama_karoo"]}
+    9:  {name: albany_thicket,  group: native_biome, members: ["albany_thicket"]}
+    10: {name: forest,          group: native_biome, members: ["forest"]}
+    11: {name: azonal,          group: native_biome, members: ["azonal"]}
+    12: {name: grassland,       group: native_biome, members: ["grassland"]}
+    # --- transformed / other (SANLC SALCC_2, collapsed) ---
+    13: {name: built_up,        group: transformed, members: ["built_up"]}
+    14: {name: cultivated,      group: transformed, members: ["cultivated"]}
+    15: {name: planted_forest,  group: transformed, members: ["planted_forest"]}
+    16: {name: bare,            group: transformed, members: ["bare"]}
+    17: {name: water,           group: transformed, members: ["water"]}
+    18: {name: wetland,         group: transformed, members: ["wetland"]}
+
 # ----------------------------------------------------------------------------
 # BioSCape VegPlots (Berg + Eerste, 2022–2023) — field plots.
 # HIGH-QUALITY GROUND TRUTH. GPS + date + species cover %.

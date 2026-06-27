@@ -22,6 +22,7 @@ from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
 from cmrv.labels.mapwaps import ingest_mapwaps
 from cmrv.labels.merge import load_training_labels, merge_partitions
 from cmrv.labels.observations import PROCESSED_ROOT
+from cmrv.labels.sanlc import ingest_sanlc
 
 
 def aoi_wc(
@@ -100,6 +101,21 @@ def labels_mapwaps_ingest(
     """
     path = ingest_mapwaps(root=root, iap_only=iap_only)
     logger.success("mapwaps ingest complete — {}", path)
+
+
+def labels_sanlc_ingest(
+    n_per_class: int = 500,
+    pool: int = 40000,
+    root: str = PROCESSED_ROOT,
+) -> None:
+    """Sample native-veg + land-cover labels from SANLC 2022 + VegMap 2024 → store.
+
+    Pixel-interior points in the WC AOI: transformed classes from SANLC SALCC_2
+    (collapsed), natural pixels by VegMap biome; known-IAP areas excluded. Feeds
+    the unified ``western_cape_landcover`` class map at make-split.
+    """
+    path = ingest_sanlc(n_per_class=n_per_class, pool=pool, root=root)
+    logger.success("sanlc ingest complete — {}", path)
 
 
 def labels_inspect(
@@ -354,6 +370,7 @@ def main() -> None:
             "aoi-tiles": aoi_tiles,
             "labels-bioscape-ingest": labels_bioscape_ingest,
             "labels-mapwaps-ingest": labels_mapwaps_ingest,
+            "labels-sanlc-ingest": labels_sanlc_ingest,
             "labels": labels_inspect,
             "chips-stats": chips_stats,
             "ingest-month": ingest_month,
