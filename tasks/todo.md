@@ -64,5 +64,10 @@ inference, deferred + validated separately.
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — Zarr → WebDataset shards; GEE→bucket compositing option for Vertex
 - [ ] Temporal head training (mask missing months) + Mahalanobis OOD + wall-to-wall inference + demo viewer
-- [ ] Re-add native/background label sources + native classes 8–11
+- [ ] **Native vegetation labels — SANLC + VegMap sampler** (when datasets land). SANLC
+  (latest) = the *actual-cover* mask + transformed classes; name natural pixels by
+  **VegMap biome** (~6 in WC: Fynbos, Succulent Karoo, Nama-Karoo, Albany Thicket,
+  Forest, Renosterveld). Sample SANLC-natural ∩ VegMap-interior only (erode boundaries;
+  mask out IAP + transformed) → `source=sanlc` in the obs store. Feeds **one unified
+  class map** (IAP genera + native biomes + transformed) → seamless every-pixel map.
 - [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)
