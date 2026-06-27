@@ -11,7 +11,7 @@ sharing a single spine:
 - Lens D — Biodiversity & Nature-Risk Intelligence (bioacoustics + camera traps)
 
 The spine (build once, reused by every lens): **AOI/tiling → sensor ingest &
-harmonization → foundation-model embeddings (Clay via terratorch) → light
+harmonization → foundation-model embeddings (UniverSat, native 10 m) → light
 per-lens heads → per-pixel uncertainty + OOD verification → delivery (COGs,
 report, viewer).** Each lens is "spine + a head + a metric + a report".
 
@@ -19,7 +19,7 @@ report, viewer).** Each lens is "spine + a head + a metric + a report".
 
 ## Phase 0 goal
 
-A 2.5 m, 3-timestep IAP species map for the Western Cape, with per-pixel
+A 10 m, 3-timestep IAP species map for the Western Cape, with per-pixel
 uncertainty and out-of-distribution novelty flags. Phase 0 is
 **IAP-species-only** — native/background classes are deferred; "not-IAP" is an
 OOD/threshold decision, not a trained class.
@@ -34,11 +34,10 @@ Phase 0 runs **locally** — no cloud bucket. All artifacts live under `data/`
 
 - `data/aoi/` — AOI polygons, tile grid
 - `data/raw/` — S2 L2A 10 m COGs
-- `data/sr/` — SEN2SR 2.5 m COGs
 - `data/labels/raw/<dataset>/` — raw downloads (untouched, gitignored)
 - `data/labels/processed/<dataset>/` — unified observation store (partitioned Parquet, mirrors raw)
 - `data/chips/train/` — 64×64 training chips + `manifest.parquet`
-- `data/embeddings/` — Clay Zarr cubes
+- `data/embeddings/` — UniverSat embedding Zarr cubes
 - `data/runs/` — checkpoints, MLflow db
 - `data/outputs/` — triplet COGs, reports
 
@@ -67,7 +66,7 @@ geopandas/pyogrio do all Parquet I/O (no DuckDB). `read_gdf` decodes the WKB +
 
 Training signal comes from **field datasets that measure cover/density**
 (occurrence points without abundance — GBIF/iNat — are dropped; a lone-tree GPS
-point is a mixed 2.5 m pixel). Raw downloads live in `data/labels/raw/<dataset>/`;
+point is a mixed 10 m pixel). Raw downloads live in `data/labels/raw/<dataset>/`;
 one **adapter per scientific dataset** writes the unified schema to
 `data/labels/processed/<dataset>/` (mirrors raw):
 
@@ -123,10 +122,10 @@ Months for the chip stack are **Feb/May/Sep** (WC phenology — see `pipeline.ya
 ## Common tripwires
 
 - **CRS drift.** Vector labels in WGS84, rasters in UTM 34S (EPSG:32734), embeddings in pixel coords. Always declare CRS; convert via `rioxarray.reproject_match`. Tile/block grids are built in UTM, never WGS84.
-- **Patch math.** Clay patch = 8, SEN2SR upsample = 4×. At 2.5 m input, one patch = 20 m; a 256-px chip = 32×32 patch tokens.
+- **Output grid.** UniverSat ingests native 10 m chips; `output_grid` sets the dense token resolution, decoupled from input. Center-token embedding for point labels; full dense grid for wall-to-wall inference.
 - **Month availability.** Some tiles have 0 valid scenes in a month — pass a `month_mask` so the temporal head ignores missing months; don't drop the tile.
 - **Label leakage.** Build spatial-block splits *before* training; never train on a block overlapping a held-out one.
-- **Silent fp16 NaNs.** Clay + AMP can emit NaN on bad input — assert `torch.isfinite(...)` after each Clay forward.
+- **Silent fp16 NaNs.** The embedding model + AMP can emit NaN on bad input — assert `torch.isfinite(...)` after each forward.
 - **No distributed dask.** `stackstac`'s internal dask is enough; one box.
 
 ## Working style

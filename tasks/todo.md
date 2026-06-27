@@ -28,28 +28,23 @@ No label data is in the store yet. When a cover-bearing dataset arrives:
 
 ---
 
-## Active — Stage 5–6: Embedding bakeoff (Clay+SR vs UniverSat)
+## Stage 5–6: Embedding — UniverSat (adopted)
 
-Pick the embedding backend **before** building the spine's embed stage. Keep it
-**encoder-agnostic** so the loser is a clean delete.
+**Bakeoff done → adopted UniverSat, dropped Clay + SEN2SR.** On 240 labelled chips
+(4 genus classes, spatial-block CV macro-F1): UniverSat (center-token) + linear probe
+≈ **0.55 ±0.17**, beating the conventional Sentinel-2 **Random Forest** baseline
+(0.38) and the raw-spectral linear floor (0.45). RF underperformed the linear probe,
+so the head stays **linear / MLP**. UniverSat ingests native 10 m chips
+`(B, T=3, 10, 64, 64)` directly — **no super-resolution, no separate temporal head**.
 
-**Interface (so Clay+SR is removable):** an `Embedder` protocol —
-`embed(stack[T,C,H,W], dates) -> np.ndarray[N, D]`. All SEN2SR code lives *inside*
-the Clay backend; adopting UniverSat = delete `sr/` + the Clay backend, flip the
-default. Chips / manifest / make-split stay untouched (already encoder-agnostic).
+Built (`src/cmrv/embeddings/`, heavy deps in the `embed` dependency group):
+`Embedder` interface · `UniverSatEmbedder` (`g-astruc/UniverSat`, MIT, ~201 M, 768-d;
+center-token for point labels, dense grid for inference) · `RawStatsEmbedder` baseline ·
+`bakeoff` linear probe + `load_bakeoff_arrays`.
 
-Backends:
-- **ClaySR** — SEN2SR (`tacofoundation/RS-SR-LTDF`) 10 m→2.5 m → frozen Clay v1.5
-  (patch 8 → 32×32 tokens). The SR stage exists only to feed Clay fine pixels.
-- **UniverSat** (`g-astruc/UniverSat`, MIT, ~201 M, 768-d) — ingests native 10 m S2
-  time-series + dates directly (no SR), `output_grid` set at inference; subsumes the
-  temporal head. Our 64×64@10 m chips feed it as `(B, T=3, 10, 64, 64)` as-is.
-
-Protocol (does **not** need the province AOI — uses the labels' own extent):
-- [ ] Pull a small real-S2 chip set for the stored labels (label-bbox AOI, Planetary Computer)
-- [ ] `Embedder` interface + both backends (`uv add` torch + clay + sen2sr + universat)
-- [ ] Embed all chips with both; linear probe on `western_cape_iap_genus`; compare macro-F1 / separability
-- [ ] Decide → if UniverSat wins: delete `sr/` + Clay backend, set UniverSat default, update roadmap + docs
+- [ ] Embedding extraction over all chips → persist embeddings (Zarr) as the durable artifact
+- [ ] Light **linear / MLP** head on the frozen encoder → per-class logits
+- [ ] Per-pixel uncertainty + Mahalanobis OOD on the embeddings
 
 **VHR / resolution decision:** spine stays **S2-only (train + inference)** — temporal
 consistency, no SR, UniverSat already wins on S2 alone. NGI 0.25 m ortho is free but

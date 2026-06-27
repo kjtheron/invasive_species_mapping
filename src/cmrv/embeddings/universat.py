@@ -23,12 +23,15 @@ class UniverSatEmbedder(Embedder):
         device: str = "cpu",
         patch_size: int = 40,
         output_grid: int = 9,
+        pool: str = "mean",
         repo: str = "gastruc/UniverSat",
         batch: int = 8,
     ) -> None:
         self.device = device
         self.patch_size = patch_size
         self.output_grid = output_grid
+        self.pool = pool  # "mean" over all tokens, or "center" token (point labels)
+        self.name = f"universat_{pool}"
         self.batch = batch
         self.model = torch.hub.load(repo, "from_pretrained", trust_repo=True).eval().to(device)
 
@@ -44,5 +47,10 @@ class UniverSatEmbedder(Embedder):
                 output_grid=self.output_grid,
             )
             feats = feats[0] if isinstance(feats, (tuple, list)) else feats  # (b, L, D)
-            out.append(feats.mean(dim=1).cpu().numpy())  # mean-pool tokens → (b, D)
+            if self.pool == "center":
+                g = int(feats.shape[1] ** 0.5)
+                vec = feats.reshape(feats.shape[0], g, g, feats.shape[2])[:, g // 2, g // 2, :]
+            else:
+                vec = feats.mean(dim=1)
+            out.append(vec.cpu().numpy())  # (b, D)
         return np.concatenate(out, axis=0).astype("float32")

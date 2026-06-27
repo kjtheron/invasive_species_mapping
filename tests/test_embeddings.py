@@ -1,4 +1,4 @@
-"""Tests for the embedding bakeoff harness (encoder-agnostic, no torch needed)."""
+"""Tests for the embedding probe harness (encoder-agnostic, no torch needed)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("torch")  # probe is torch; needs the `embed` dependency group
 
-from cmrv.embeddings import RawStatsEmbedder, linear_probe_scores, run_bakeoff
+from cmrv.embeddings import RawStatsEmbedder, evaluate_embedders, linear_probe_scores
 
 
 def _synthetic(n_per_class: int = 10, n_groups: int = 4):
@@ -39,8 +39,8 @@ def test_probe_separates_synthetic() -> None:
     assert mean_f1 > 0.8  # band-mean signal is trivially separable
 
 
-def test_run_bakeoff_table() -> None:
+def test_evaluate_embedders_table() -> None:
     stacks, dates, y, groups = _synthetic()
-    df = run_bakeoff(stacks, dates, y, groups, [RawStatsEmbedder()])
+    df = evaluate_embedders(stacks, dates, y, groups, [RawStatsEmbedder()])
     assert list(df.columns) == ["embedder", "dim", "macro_f1", "f1_std"]
     assert df.iloc[0]["embedder"] == "rawstats"

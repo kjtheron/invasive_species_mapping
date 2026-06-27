@@ -2,7 +2,7 @@
 
 For each label point, extracts a 64x64 px (10 m) chip for each configured
 season month from the label's observation year. The multi-month temporal stack
-feeds SR -> Clay -> temporal head.
+feeds the UniverSat embedding stage directly (no super-resolution).
 
 Spatial blocks (not inference tiles) serve dual purpose:
     1. Query batching — one STAC composite per (block, year, month)
@@ -867,7 +867,7 @@ def thin_labels(
 
     Snaps each label's UTM coordinate to a ``thin_m`` grid and keeps a single
     label per ``(species, cell)`` — removing near-duplicates the embedding can't
-    distinguish (20 m = Clay patch footprint at 2.5 m) *before* any imagery is
+    distinguish (20 m ≈ 2 native S2 pixels) *before* any imagery is
     fetched, so we never download chips we'd discard.
 
     The survivor is the smallest ``obs_id`` in the cell, so thinning is
