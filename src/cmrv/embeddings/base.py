@@ -1,10 +1,9 @@
-"""Encoder-agnostic embedding interface for the Clay-vs-UniverSat bakeoff.
+"""Encoder-agnostic embedding interface.
 
 An ``Embedder`` maps a stack of monthly S2 composites for one chip to a single
-feature vector. The bakeoff swaps implementations; chips / manifest / make-split
-/ probe never know which encoder ran. **All super-resolution lives inside
-``ClaySREmbedder``** — adopting UniverSat = delete ``claysr.py`` + flip the
-default, nothing else changes.
+feature vector. Swapping the implementation leaves the rest of the pipeline
+(chips / manifest / make-split / probe) untouched. UniverSat is the adopted
+encoder; ``RawStatsEmbedder`` is the dependency-free baseline.
 
 Chip-stack convention: float32 ``(N, T, C, H, W)`` — N chips, T months, C bands
 (10), H×W pixels at native 10 m. ``dates`` is ``(N, T)`` day-of-year ints.
@@ -21,7 +20,7 @@ MONTH_DOY: dict[str, int] = {"feb": 46, "may": 135, "sep": 258}
 
 
 class Embedder(ABC):
-    """One feature vector per chip. Implementations: universat, clay_sr, rawstats."""
+    """One feature vector per chip. Implementations: universat, rawstats."""
 
     name: str
 
@@ -30,16 +29,11 @@ class Embedder(ABC):
         """``(N, T, C, H, W)`` float32 + ``(N, T)`` day-of-year → ``(N, D)`` float32."""
 
 
-def mean_pool(tokens: np.ndarray) -> np.ndarray:
-    """``(N, L, D)`` token grid → ``(N, D)`` mean over tokens."""
-    return tokens.mean(axis=1)
-
-
 class RawStatsEmbedder(Embedder):
     """Dependency-free baseline: per-(month, band) spatial mean + std.
 
-    The bakeoff's sanity floor — a foundation model must beat plain spectral
-    statistics to justify itself. Also the test fixture (no torch/weights).
+    The sanity floor — the encoder must beat plain spectral statistics to justify
+    itself. Doubles as the no-torch test fixture.
     """
 
     name = "rawstats"

@@ -1,20 +1,19 @@
-"""Embedding stage — encoder-agnostic backends + the bakeoff probe.
+"""Embedding stage — encoder-agnostic backend + the linear-probe evaluation.
 
-Light exports only (numpy/pandas). The heavy backends pull their own deps and
-are imported explicitly:
+Light exports only (numpy/pandas). The UniverSat backend pulls torch and is
+imported explicitly:
 
-    from cmrv.embeddings.universat import UniverSatEmbedder   # needs torch
-    from cmrv.embeddings.claysr import ClaySREmbedder         # needs sen2sr + clay
+    from cmrv.embeddings.universat import UniverSatEmbedder   # needs the `embed` group
 """
 
-from cmrv.embeddings.bakeoff import linear_probe_scores, run_bakeoff
-from cmrv.embeddings.base import MONTH_DOY, Embedder, RawStatsEmbedder, mean_pool
+from cmrv.embeddings.base import MONTH_DOY, Embedder, RawStatsEmbedder
+from cmrv.embeddings.probe import evaluate_embedders, linear_probe_scores, load_chip_arrays
 
 __all__ = [
     "MONTH_DOY",
     "Embedder",
     "RawStatsEmbedder",
+    "evaluate_embedders",
     "linear_probe_scores",
-    "mean_pool",
-    "run_bakeoff",
+    "load_chip_arrays",
 ]

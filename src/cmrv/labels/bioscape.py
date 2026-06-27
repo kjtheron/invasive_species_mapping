@@ -44,6 +44,9 @@ from cmrv.labels.observations import PROCESSED_ROOT, make_run_id, write_partitio
 DEFAULT_SCHEMA_PATH = "configs/labels_schema.yaml"
 DEFAULT_CLASS_MAP = "western_cape_iap"
 DATASET = "BioSCape_VegPlots_Berg_Eerste_2425"
+DOI = "10.3334/ORNLDAAC/2425"
+SOURCE_URL = "https://doi.org/10.3334/ORNLDAAC/2425"
+LICENSE = "NASA ORNL DAAC — free (Earthdata login); cite per DOI"
 
 # ---------------------------------------------------------------------------
 # Data file paths (ORNL DAAC archive layout)
@@ -197,9 +200,9 @@ def ingest_lineintercept(
                 "obs_id": obs_id,
                 "source": source,
                 "source_record_id": obs_id,
-                "source_url": None,
-                "source_doi": None,  # TODO: fill from dataset metadata
-                "license": None,  # TODO: fill from dataset metadata
+                "source_url": SOURCE_URL,
+                "source_doi": DOI,
+                "license": LICENSE,
                 "species": sp_raw,
                 "species_normalized": sp_norm,
                 "taxon_rank": "species",
@@ -315,9 +318,9 @@ def ingest_plotcoverage(
                 "obs_id": obs_id,
                 "source": source,
                 "source_record_id": obs_id,
-                "source_url": None,
-                "source_doi": None,  # TODO: fill from dataset metadata
-                "license": None,  # TODO: fill from dataset metadata
+                "source_url": SOURCE_URL,
+                "source_doi": DOI,
+                "license": LICENSE,
                 "species": sp_raw,
                 "species_normalized": sp_norm,
                 "taxon_rank": "species",

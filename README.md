@@ -1,6 +1,6 @@
 # catchment-mrv
 
-Phase 0 prototype for **Lens A — Invasive Alien Plant Intelligence**: a 2.5 m,
+Phase 0 prototype for **Lens A — Invasive Alien Plant Intelligence**: a 10 m,
 multi-season IAP species map for the Western Cape, with per-pixel uncertainty
 and out-of-distribution novelty flags.
 
