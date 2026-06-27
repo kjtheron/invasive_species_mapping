@@ -30,8 +30,3 @@ cloud_cover_max: 95
 paths:
   tiles: data/aoi/processed/tiles.parquet
   raw_prefix: data/raw
-  sr_prefix: data/sr
-  labels_prefix: data/labels
-  embeddings_prefix: data/embeddings
-  runs_prefix: data/runs
-  outputs_prefix: data/outputs

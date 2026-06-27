@@ -25,7 +25,6 @@ from shapely import to_wkb
 from cmrv.io import list_parquet_files, read_parquet_df, write_parquet_df
 
 PROCESSED_ROOT = "data/labels/processed"
-COORD_UNCERTAINTY_DROP_M = 500.0
 # One partition directory per source dataset (mirrors data/labels/raw/<dataset>/).
 KNOWN_DATASETS = frozenset(
     {"BioSCape_VegPlots_Berg_Eerste_2425", "mapwaps_olifants_doring", "sanlc_2022"}
@@ -203,7 +202,6 @@ def write_summary(
 
 __all__ = [
     "COLUMNS",
-    "COORD_UNCERTAINTY_DROP_M",
     "KNOWN_DATASETS",
     "PROCESSED_ROOT",
     "REQUIRED_COLUMNS",
