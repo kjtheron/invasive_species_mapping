@@ -209,16 +209,23 @@ def load_head(ckpt_path: str):
     return model, ck["mu"], ck["sd"], np.asarray(ck["classes"]), ck["ood"]
 
 
-def predict_dense(model, mu, sd, classes: np.ndarray, ood: dict, x: np.ndarray):
-    """Features ``(N, D)`` → ``(class_ids, confidence 0-1, ood_score 0-1)``.
+def predict_probs(model, mu, sd, ood: dict, x: np.ndarray):
+    """Features ``(N, D)`` → ``(softmax probs (N, K), ood_score (N,) 0-1)``.
 
-    confidence = max softmax probability; ood_score = Mahalanobis distance / threshold,
-    scaled so 0.5 = the train 97.5-pct cutoff (``>0.5`` ⇒ novel / not-IAP).
+    ood_score = Mahalanobis distance / threshold, scaled so 0.5 = the train 97.5-pct
+    cutoff (``>0.5`` ⇒ novel / not-IAP). Returns full probs so overlapping inference
+    windows can be blended before the argmax.
     """
     import torch
 
     xstd = ((x - mu) / sd).astype("float32")
     with torch.no_grad():
-        prob = torch.softmax(model(torch.tensor(xstd)), dim=1).numpy()
+        probs = torch.softmax(model(torch.tensor(xstd)), dim=1).numpy()
     d = _maha(xstd, ood["means"], ood["prec"])
-    return classes[prob.argmax(1)], prob.max(1), np.clip(d / ood["threshold"], 0, 2) / 2
+    return probs, np.clip(d / ood["threshold"], 0, 2) / 2
+
+
+def predict_dense(model, mu, sd, classes: np.ndarray, ood: dict, x: np.ndarray):
+    """Features ``(N, D)`` → ``(class_ids, confidence 0-1, ood_score 0-1)`` (argmax of probs)."""
+    probs, ood_score = predict_probs(model, mu, sd, ood, x)
+    return classes[probs.argmax(1)], probs.max(1), ood_score
