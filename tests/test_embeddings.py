@@ -71,7 +71,11 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
             return np.zeros((len(stacks), 768), dtype="float32")
 
     out = embed_chips(
-        str(tmp_path / "manifest.parquet"), str(tmp_path / "emb.zarr"), _Stub(), batch=1
+        str(tmp_path / "manifest.parquet"),
+        str(tmp_path / "emb.zarr"),
+        _Stub(),
+        batch=1,
+        num_workers=0,
     )
     ds = xr.open_zarr(out)
     assert ds["emb"].shape == (2, 768)
