@@ -17,6 +17,10 @@ from loguru import logger
 
 from cmrv.embeddings.base import MONTH_DOY, Embedder
 
+# CRS the chips were extracted in (must match cmrv.ingest.chips epsg); point
+# coords are reprojected from this to EPSG:4326 for a zone-agnostic point index.
+CHIP_CRS = "EPSG:32734"
+
 
 def _load_stack(uris: list[str], scale: float) -> np.ndarray:
     """Read a ``(T, C, H, W)`` chip stack — DN→reflectance, cloud-NaN filled with 0."""
@@ -76,18 +80,25 @@ def embed_chips(
         logger.info("embedded {}/{}", min(i + batch, len(recs)), len(recs))
 
     emb = np.concatenate(embs).astype("float32")
-    # All training chips are extracted in one CRS (UTM 34S), so x_utm/y_utm + the
-    # crs attr make this CRS-less feature cube a valid point layer for mapping
-    # point predictions. Wall-to-wall maps get their CRS from the inference tile.
+    # Point location → EPSG:4326 (lon/lat): a single GLOBAL CRS, so the cube stays a
+    # valid point layer even as labels span multiple UTM zones (per-point UTM would
+    # mean per-point CRS). Chips are extracted in UTM 34S → reproject once here. When
+    # chip extraction goes multi-UTM, carry a per-chip epsg in the manifest and
+    # reproject per row. Wall-to-wall maps get their CRS from the inference tile.
+    from pyproj import Transformer
+
+    lon, lat = Transformer.from_crs(CHIP_CRS, "EPSG:4326", always_xy=True).transform(
+        np.array(xs), np.array(ys)
+    )
     ds = xr.Dataset(
         {"emb": (("obs", "feat"), emb)},
         coords={
             "obs_id": ("obs", np.array(obs_ids)),
             "block_id": ("obs", np.array(block_ids)),
-            "x_utm": ("obs", np.array(xs, dtype="float64")),
-            "y_utm": ("obs", np.array(ys, dtype="float64")),
+            "lon": ("obs", np.asarray(lon, dtype="float64")),
+            "lat": ("obs", np.asarray(lat, dtype="float64")),
         },
-        attrs={"crs": "EPSG:32734"},
+        attrs={"crs": "EPSG:4326"},
     )
     ds.to_zarr(out_uri, mode="w")
     logger.success("wrote {} embeddings ({}-d) → {}", len(obs_ids), emb.shape[1], out_uri)
