@@ -371,7 +371,9 @@ def embed(
     out: str = "data/embeddings/universat_center.zarr",
     output_grid: int = 64,
     device: str = "cpu",
-    batch: int = 8,
+    batch: int = 32,
+    num_workers: int = 4,
+    amp: bool = False,
 ) -> None:
     """Embed training chips → UniverSat center-token vectors (single Zarr).
 
@@ -380,12 +382,18 @@ def embed(
     pooling = the per-location representation the frozen head replicates densely at
     inference. CRS-less + tiny (~7.5 MB), so it's a single Zarr regardless of source
     UTM zone. Needs the ``embed`` dependency group.
+
+    --device: ``cpu`` or ``cuda`` (cloud). --num-workers: chip-prefetch workers that
+    overlap disk reads with the forward (raise on GPU to keep it fed). --amp: fp16/bf16
+    autocast (big GPU win; leave off on CPU).
     """
     from cmrv.embeddings.embed import embed_chips
     from cmrv.embeddings.universat import UniverSatEmbedder
 
-    enc = UniverSatEmbedder(pool="center", output_grid=output_grid, device=device, batch=batch)
-    embed_chips(manifest, out, enc, batch=batch)
+    enc = UniverSatEmbedder(
+        pool="center", output_grid=output_grid, device=device, batch=batch, amp=amp
+    )
+    embed_chips(manifest, out, enc, batch=batch, num_workers=num_workers)
 
 
 def train_head(

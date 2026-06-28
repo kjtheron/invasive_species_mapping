@@ -26,6 +26,7 @@ class UniverSatEmbedder(Embedder):
         pool: str = "mean",
         repo: str = "gastruc/UniverSat",
         batch: int = 8,
+        amp: bool = False,
     ) -> None:
         self.device = device
         self.patch_size = patch_size
@@ -33,6 +34,7 @@ class UniverSatEmbedder(Embedder):
         self.pool = pool  # "mean" over all tokens, or "center" token (point labels)
         self.name = f"universat_{pool}"
         self.batch = batch
+        self.amp = amp  # autocast (fp16/bf16) — big GPU win, usually no-op/slower on CPU
         self.model = torch.hub.load(repo, "from_pretrained", trust_repo=True).eval().to(device)
 
     @torch.no_grad()
@@ -41,11 +43,13 @@ class UniverSatEmbedder(Embedder):
         for i in range(0, len(stacks), self.batch):
             s = torch.as_tensor(stacks[i : i + self.batch], dtype=torch.float32, device=self.device)
             d = torch.as_tensor(dates[i : i + self.batch], dtype=torch.long, device=self.device)
-            feats = self.model.encode(
-                {"s2": s, "s2_dates": d},
-                patch_size=self.patch_size,
-                output_grid=self.output_grid,
-            )
+            dev_type = "cuda" if self.device.startswith("cuda") else "cpu"
+            with torch.autocast(device_type=dev_type, enabled=self.amp):
+                feats = self.model.encode(
+                    {"s2": s, "s2_dates": d},
+                    patch_size=self.patch_size,
+                    output_grid=self.output_grid,
+                )
             feats = feats[0] if isinstance(feats, (tuple, list)) else feats  # (b, L, D)
             if self.pool == "center":
                 g = int(feats.shape[1] ** 0.5)
