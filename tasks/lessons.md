@@ -65,3 +65,13 @@ pc.sign_inplace(item)
 **How to apply:** New label source?  Ingest it, run `ingest-chips`, run `chips-stats`.  Want to train on a specific species set?  `make-split --species [...]` filters the manifest; pass `--class-map` only if you want `class_id` columns assigned.  When `--species` is explicit, unmapped species are *kept* (warning only) — class_map is a labelling shim, not a gatekeeper.
 
 **Why this matters:** The manifest is the empirical record of what got chipped.  Treating it as the source of truth for exploration eliminates an entire category of "audit says X, manifest says Y" bugs (the NLC `class_crosswalk` mismatch and the AOI confusion both came from re-deriving instead of reading).  Four CLI verbs cover the path: `labels-ingest → ingest-chips → chips-stats → make-split`.
+
+---
+
+## `ingest-chips` is additive — reconcile the manifest against the current thinned set
+
+**Rule:** Chipping only ever *adds*. When the label store changes (a source re-ingested, a `iap_only` filter, or deterministic thinning picking a different one-per-cell representative), a prior run's chips for now-dropped obs stay on disk + in the manifest. The manifest silently becomes a **superset** of the canonical one-rep-per-(species,20 m-cell) set — near-duplicate training samples concentrated in whatever source churned (here: +741 obs, 66% Pinus).
+
+**How to apply:** `extract_training_chips` captures the passed-in thinned set as `canonical_obs` *before* incremental filtering, and `_reconcile_manifest` prunes any manifest obs (and its chip files + emptied dirs) outside it at the end of a top-level run — gated off the year-fallback recursion. Re-running `ingest-chips` is now self-healing and reproducible; it also runs on the "all already chipped — nothing to do" path. Disk-only, no re-download.
+
+**Why this matters:** Spatial-block CV stops near-dups leaking across folds, so this never inflates held-out accuracy — but it skews class balance + per-class metrics toward the churned source and makes the manifest a function of run *history*, not current inputs. "manifest == chips on disk" was always true; the real invariant is "manifest == current thinned set".

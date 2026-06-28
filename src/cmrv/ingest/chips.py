@@ -1099,6 +1099,42 @@ def _labels_to_gdf(label_pts: pd.DataFrame, manifest: pd.DataFrame) -> gpd.GeoDa
     return gdf.to_crs("EPSG:4326")
 
 
+def _reconcile_manifest(
+    manifest: pd.DataFrame,
+    keep_obs: set[str],
+    manifest_uri: str,
+) -> pd.DataFrame:
+    """Prune chips for obs outside the current thinned set, then rewrite manifest.
+
+    ``ingest-chips`` is additive: a re-thinning that drops an obs (because a
+    label-store change picked a different one-per-cell representative) leaves the
+    old obs's chips behind, so the manifest becomes a superset of the canonical
+    one-rep-per-cell set. This deletes those stale chip files + their now-empty
+    obs dirs and rewrites the manifest to equal the canonical set. Disk-only — no
+    re-download. ponytail: O(n) manifest scan, fine at chip-set scale.
+    """
+    if manifest.empty:
+        return manifest
+    stale = manifest[~manifest["obs_id"].isin(keep_obs)]
+    if stale.empty:
+        return manifest
+    for uri in stale["chip_uri"]:
+        Path(uri).unlink(missing_ok=True)
+    for d in {Path(u).parent for u in stale["chip_uri"]}:
+        if d.exists() and not any(d.iterdir()):
+            d.rmdir()
+    kept = manifest[manifest["obs_id"].isin(keep_obs)].reset_index(drop=True)
+    write_parquet_df(kept, manifest_uri)
+    logger.success(
+        "reconcile: pruned {} stale chips ({} obs) → {} chips ({} obs) in the thinned set",
+        len(stale),
+        stale["obs_id"].nunique(),
+        len(kept),
+        kept["obs_id"].nunique(),
+    )
+    return kept
+
+
 def extract_training_chips(
     labels: gpd.GeoDataFrame,
     blocks: gpd.GeoDataFrame,
@@ -1146,6 +1182,11 @@ def extract_training_chips(
     if "_year" not in labels.columns:
         ed = pd.to_datetime(labels["event_date"], errors="coerce")
         labels["_year"] = ed.dt.year.fillna(default_year).astype(int)
+
+    # Canonical set for this (top-level) call = the thinned labels as passed in,
+    # captured before the incremental filter below mutates `labels`. Used at the
+    # end to prune chips for obs a re-thinning has since dropped (additive cruft).
+    canonical_obs = set(labels["obs_id"])
 
     # Recover any leftover shards from a prior crashed run before building the
     # incremental skip set — that way partial-month obs_ids from a prior run
@@ -1213,6 +1254,8 @@ def extract_training_chips(
 
     if labels.empty:
         logger.success("all labels already fully chipped — nothing to do")
+        if year_fallback:  # top-level call: still reconcile away thinned-out cruft
+            existing_manifest = _reconcile_manifest(existing_manifest, canonical_obs, manifest_uri)
         return existing_manifest
 
     # Track obs_ids attempted in this pass — used for the Y-1 fallback below.
@@ -1314,5 +1357,10 @@ def extract_training_chips(
                 max_workers=max_workers,
                 year_fallback=False,
             )
+
+    # Top-level call only (year_fallback=True): after this run + any Y-1 fallback,
+    # prune chips for obs no longer in the thinned set so the manifest == canonical.
+    if year_fallback:
+        manifest_df = _reconcile_manifest(manifest_df, canonical_obs, manifest_uri)
 
     return manifest_df
