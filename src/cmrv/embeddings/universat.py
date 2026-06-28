@@ -40,10 +40,10 @@ class UniverSatEmbedder(Embedder):
     @torch.no_grad()
     def embed(self, stacks: np.ndarray, dates: np.ndarray) -> np.ndarray:
         out = []
+        dev_type = "cuda" if self.device.startswith("cuda") else "cpu"
         for i in range(0, len(stacks), self.batch):
             s = torch.as_tensor(stacks[i : i + self.batch], dtype=torch.float32, device=self.device)
             d = torch.as_tensor(dates[i : i + self.batch], dtype=torch.long, device=self.device)
-            dev_type = "cuda" if self.device.startswith("cuda") else "cpu"
             with torch.autocast(device_type=dev_type, enabled=self.amp):
                 feats = self.model.encode(
                     {"s2": s, "s2_dates": d},

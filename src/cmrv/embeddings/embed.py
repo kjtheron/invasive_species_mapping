@@ -97,7 +97,7 @@ def embed_chips(
         batch_size=batch,
         shuffle=False,  # batches arrive in recs order → aligns with the metadata below
         num_workers=num_workers,
-        pin_memory=encoder.device.startswith("cuda") if hasattr(encoder, "device") else False,
+        pin_memory=getattr(encoder, "device", "cpu").startswith("cuda"),
     )
     dvec = np.array([MONTH_DOY[mo] for mo in months])
     embs, done = [], 0
