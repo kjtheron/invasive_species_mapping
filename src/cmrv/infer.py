@@ -90,19 +90,19 @@ def _d4_ops(tta: bool):
 def infer_box(
     bbox: tuple[float, float, float, float],
     ckpt_path: str,
-    out_uri: str,
+    out_uri: str = "data/outputs/infer.tif",
     *,
     year: int = 2023,
     pipeline: str = "configs/pipeline.yaml",
     device: str = "cpu",
     tta: bool = False,
-) -> str:
-    """``(minlon, minlat, maxlon, maxlat)`` → 3-band (class, confidence, OOD) COG.
+):
+    """``(minlon, minlat, maxlon, maxlat)`` → writes a COG, returns ``(bands, transform, epsg)``.
 
-    Overlapping 64 px windows with a Hann edge-taper: each output pixel is the blended
-    average of every window covering it, weighted toward window centres — so edge tokens
-    (truncated receptive field) contribute ~nothing and there are no 640 m window seams.
-    ``tta`` averages 8 dihedral (flip/rotation) views per window — more robust, 8× slower.
+    Bands are class_id / confidence / OOD. Always saves the COG to ``out_uri`` (set the
+    path to control where) and also returns the arrays + georef so a caller can mosaic
+    tiles. Overlapping 64 px windows with a Hann edge-taper blend away the 640 m window
+    seams; ``tta`` averages 8 dihedral (flip/rotation) views per window — robust, 8× slower.
     """
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
@@ -154,21 +154,15 @@ def infer_box(
     cls_map = classes[prob.argmax(2)].astype(np.uint8)
     conf_map = (prob.max(2) * 100).astype(np.uint8)
     ood_map = (np.clip(ood_acc / wsum, 0, 1) * 100).astype(np.uint8)
+    out = np.stack([cls_map, conf_map, ood_map])
 
-    write_cog(
-        np.stack([cls_map, conf_map, ood_map]),
-        transform,
-        f"EPSG:{epsg}",
-        out_uri,
-        dtype="uint8",
-        nodata=NODATA,
-    )
+    write_cog(out, transform, f"EPSG:{epsg}", out_uri, dtype="uint8", nodata=NODATA)
     logger.success(
-        "wrote class/confidence/OOD COG ({}×{}, {} classes, overlap-blended) @ EPSG:{} → {}",
+        "wrote class/confidence/OOD COG ({}×{}, {} classes) @ EPSG:{} → {}",
         h,
         w,
         k,
         epsg,
         out_uri,
     )
-    return out_uri
+    return out, transform, epsg
