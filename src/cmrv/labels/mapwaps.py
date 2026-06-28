@@ -15,9 +15,10 @@ Decisions baked in (see the Training-dataset metadata PDF):
 - **taxon_rank = genus** for the Alien_* IAP classes (Pine/Gum/Wattle/Prosopis) —
   the survey did not resolve them to species. Species-level resolution is left to
   a hierarchical-loss head later; for now ``make-split`` uses a genus class map.
-- **All 23 LULC classes are kept** (store everything). Native / land-cover rows
-  keep their LULC label verbatim, resolve to no IAP class, and are dropped at
-  ``make-split``.
+- **Default ``iap_only`` keeps the four named IAP genera** (Alien_Pine/Gum/Wattle/
+  Prosopis); native / land-cover rows and the unspecific ``Alien_Other`` are dropped
+  at ingest. ``iap_only=False`` stores all 23 classes (the extra rows resolve to no
+  IAP class and are dropped at ``make-split``).
 """
 
 from __future__ import annotations
@@ -136,10 +137,11 @@ def ingest_mapwaps(
 ) -> str:
     """Ingest MapWAPS Olifants-Doring training points → unified store (``source=mapwaps``).
 
-    ``iap_only`` (default): keep only the ``Alien_*`` LULC classes (the IAP labels);
-    native / land-cover classes are dropped at ingest — native vegetation comes from
-    SANLC/VegMap, not these incidental survey points. Pass ``iap_only=False`` to
-    ingest all 23 classes. Geometry used as-is (already corrected), reprojected to 4326.
+    ``iap_only`` (default): keep only the four **named** IAP genus classes
+    (Alien_Pine/Gum/Wattle/Prosopis); native / land-cover rows *and* the unspecific
+    ``Alien_Other`` class are dropped at ingest — native vegetation comes from
+    SANLC/VegMap, and ``Alien_Other`` resolves to no genus. Pass ``iap_only=False``
+    to ingest all 23 classes. Geometry used as-is (already corrected), reprojected to 4326.
     """
     run_id = run_id or make_run_id(SOURCE)
     ingested_at = dt.datetime.now(tz=dt.UTC)
@@ -150,8 +152,8 @@ def ingest_mapwaps(
 
     if iap_only:
         n0 = len(gdf)
-        gdf = gdf[gdf["LULC_Class"].astype(str).str.startswith("Alien_")].reset_index(drop=True)
-        logger.info("iap_only: kept {} of {} rows (Alien_* LULC)", len(gdf), n0)
+        gdf = gdf[gdf["LULC_Class"].astype(str).isin(_ALIEN_LULC)].reset_index(drop=True)
+        logger.info("iap_only: kept {} of {} rows (named IAP genera)", len(gdf), n0)
 
     # Single field campaign → fill undated points with the modal observation date
     # so per-label year alignment (event_date.year) holds for all of them.

@@ -258,20 +258,24 @@ def chips_make_split(
     block_km: float = 10.0,
     train_frac: float = 0.70,
     val_frac: float = 0.15,
+    min_class_obs: int = 0,
     lock_folds: bool = True,
 ) -> None:
     """Generate a reproducible spatial split from the chip manifest.
 
     Reads the manifest, optionally filters to a species subset, assigns spatial
-    blocks to train/val/test folds, and writes split files. Obs with 1–3 of the
-    configured months are all kept (the temporal head masks missing timesteps);
+    blocks to train/val/test folds via iterative stratification (whole blocks, no
+    leakage; each class spread across folds), and writes split files. Obs with 1–3
+    of the configured months are all kept (the temporal head masks missing months);
     thinning already happened at ``ingest-chips`` time.
 
     --species: species names (exact match) to include. Omit for all.
     --class-map-name: a class_maps entry in the schema YAML (e.g. "western_cape_iap").
                       Adds a class_id column collapsing species to a shared class
-                      (e.g. all Eucalyptus spp → class 5). Unmapped rows dropped
-                      unless --species is given.
+                      (e.g. all Eucalyptus spp → class 5); the split is stratified on
+                      class_id. Unmapped rows dropped unless --species is given.
+    --min-class-obs: drop classes with fewer than N obs before splitting (0 = keep
+                     all). Use for classes too rare to appear in every fold.
     --lock-folds: re-use existing block_folds.parquet assignments.
     """
     result = make_split(
@@ -284,6 +288,7 @@ def chips_make_split(
         block_km=block_km,
         train_frac=train_frac,
         val_frac=val_frac,
+        min_class_obs=min_class_obs,
         out_prefix=out_prefix,
         lock_folds=lock_folds,
     )
