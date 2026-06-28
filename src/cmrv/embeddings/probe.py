@@ -97,7 +97,9 @@ def load_chip_arrays(
     months: tuple[str, ...] = ("feb", "may", "sep"),
     min_class_count: int = 10,
     max_per_class: int | None = None,
-    scale: float = 1.0,
+    scale: float = 1.0 / 10000,
+    min_valid_frac: float = 0.5,
+    split: str | None = None,
     seed: int = 42,
 ):
     """Load chips from the manifest → ``(stacks, dates, y, groups, obs_ids)``.
@@ -105,10 +107,16 @@ def load_chip_arrays(
     One ``(T, C, H, W)`` stack per obs_id with all ``months`` present; ``y`` is the
     class_id under ``class_map_name`` (unmapped/native dropped); ``groups`` is the
     spatial block. Rare classes (< ``min_class_count``) are dropped so grouped CV
-    is well-posed; ``max_per_class`` optionally subsamples for speed; ``scale``
-    multiplies reflectance (e.g. 1/10000 for raw S2 DN).
+    is well-posed; ``max_per_class`` optionally subsamples for speed.
+
+    ``scale`` multiplies reflectance — **default 1/10000** for raw S2 DN → reflectance
+    (UniverSat expects this range). Cloud-masked NaN pixels are filled with 0 after
+    scaling so the encoder never sees NaN. ``min_valid_frac`` drops obs whose any
+    month's chip is below that finite-pixel fraction. ``split`` (``"train"``/``"val"``
+    /``"test"``) restricts to that fold's obs from ``<dir>/<split>.txt``.
     """
     from collections import Counter
+    from pathlib import Path
 
     import rasterio
 
@@ -118,6 +126,13 @@ def load_chip_arrays(
     cm = build_lookup(schema_path, class_map_name)
     man = pd.read_parquet(manifest_uri)
     rng = np.random.default_rng(seed)
+
+    if split:  # restrict to one fold from make-split's split files
+        ids = set(Path(manifest_uri).parent.joinpath(f"{split}.txt").read_text().split())
+        man = man[man["obs_id"].isin(ids)]
+    if min_valid_frac > 0 and "valid_frac" in man.columns:
+        keep = man.groupby("obs_id")["valid_frac"].transform("min") >= min_valid_frac
+        man = man[keep]
 
     rows = []
     for obs_id, g in man.groupby("obs_id"):
@@ -149,7 +164,8 @@ def load_chip_arrays(
         frames = []
         for uri in uris:
             with rasterio.open(uri) as src:
-                frames.append(src.read().astype("float32") * scale)  # (C, H, W)
+                # scale DN→reflectance, then fill cloud-NaN with 0 (UniverSat NaN-poisons)
+                frames.append(np.nan_to_num(src.read().astype("float32") * scale, nan=0.0))
         stacks.append(np.stack(frames))
         dates.append(dvec)
         y.append(cls)

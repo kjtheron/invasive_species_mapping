@@ -80,10 +80,11 @@ from cmrv.io import ensure_parent, read_parquet_df, write_parquet_df
 CHIP_PX = 64
 RESOLUTION_M = 10
 BUFFER_M = (CHIP_PX * RESOLUTION_M) / 2
-# Min fraction of chip pixels where ALL bands are finite. 0.3 keeps chips
-# usable for training where NaN-tolerant patch masking is downstream; record
-# the actual valid_frac in the manifest for sample weighting.
-MIN_VALID_FRAC = 0.3
+# Min fraction of chip pixels where ALL bands are finite. The cloud-NaN that
+# remains is filled before embedding (UniverSat NaN-poisons otherwise); 0.5 drops
+# chips too cloudy to be worth filling. valid_frac is recorded per chip so the
+# loader can filter/weight further.
+MIN_VALID_FRAC = 0.5
 BLOCK_KM = 10
 # Default ±days padding around each calendar-month window (chips only).
 # Widening to ±15d roughly doubles the candidate-scene pool per window so
@@ -1018,8 +1019,14 @@ def make_split(
     if lock_folds and out_prefix:
         existing_folds = _load_block_folds(f"{out_prefix}/block_folds.parquet")
 
+    label_gdf = _labels_to_gdf(label_pts, manifest)
+    if class_map_name:
+        # Class-aware de-dup: collapse same-class near-dups whose source species
+        # strings differ (e.g. "Pinus" vs "Pinus pinaster") — the species-level thin
+        # at ingest time keeps those separate. thin_m matches ingest (20 m).
+        label_gdf = thin_labels(label_gdf, thin_m=20.0, species_col="class_id")
     label_pts, block_to_fold = stratified_spatial_split(
-        _labels_to_gdf(label_pts, manifest),
+        label_gdf,
         blocks,
         species_col=strat_col,
         train_frac=train_frac,

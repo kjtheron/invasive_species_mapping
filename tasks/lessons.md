@@ -75,3 +75,25 @@ pc.sign_inplace(item)
 **How to apply:** `extract_training_chips` captures the passed-in thinned set as `canonical_obs` *before* incremental filtering, and `_reconcile_manifest` prunes any manifest obs (and its chip files + emptied dirs) outside it at the end of a top-level run — gated off the year-fallback recursion. Re-running `ingest-chips` is now self-healing and reproducible; it also runs on the "all already chipped — nothing to do" path. Disk-only, no re-download.
 
 **Why this matters:** Spatial-block CV stops near-dups leaking across folds, so this never inflates held-out accuracy — but it skews class balance + per-class metrics toward the churned source and makes the manifest a function of run *history*, not current inputs. "manifest == chips on disk" was always true; the real invariant is "manifest == current thinned set".
+
+---
+
+## The chip→encoder contract: scale ÷10000 and fill NaN before UniverSat
+
+**Rule:** Chips are stored as raw S2 DN with cloud-masked pixels left as NaN (so
+`valid_frac` is honest). UniverSat (and any ViT) NaN-poisons — one NaN token makes a
+mean-pooled vector NaN — and expects reflectance, not DN. So the loader, not the
+chipper, owns the encoder contract: `load_chip_arrays` defaults `scale=1/10000` and
+`np.nan_to_num(..., nan=0.0)` after scaling, and `UniverSatEmbedder.embed` asserts
+`torch.isfinite` after the forward. `RawStatsEmbedder` hid this (it uses `nanmean`),
+so the bakeoff looked fine while the production path would have trained on NaN.
+
+**How to apply:** Never feed stored chips straight to an encoder — scale + fill first.
+SCL mask now also drops 0 (no-data) and 1 (saturated/defective); `MIN_VALID_FRAC` is
+0.5 and `load_chip_arrays(min_valid_frac=…, split=…)` filters poor chips + honors the
+train/val/test fold files (the split is only useful if the loader reads it).
+
+**Why this matters:** A silent NaN/scale bug degrades the *adopted* model while the
+baseline masks it — the worst kind of regression. Also: `read_all` now reads only
+dataset partition files (`root/<dataset>/*.parquet`), never root-level `summary.parquet`,
+which was inflating per-source counts by 1 and injecting a geometry-less phantom row.

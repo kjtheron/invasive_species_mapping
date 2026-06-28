@@ -95,6 +95,21 @@ def test_upsert_distinct_obs_ids_both_retained() -> None:
         assert len(df) == 2
 
 
+def test_read_all_ignores_root_level_parquet() -> None:
+    """A summary.parquet sitting in the root must not pollute the observation rows."""
+    from cmrv.labels.observations import read_all
+
+    gdf = _make_gdf([{"obs_id": "x:1", "source_record_id": "1"}])
+    with tempfile.TemporaryDirectory() as tmp:
+        root = f"{tmp}/obs"
+        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
+        # drop a stray non-partition parquet directly under root (like summary.parquet)
+        pd.DataFrame({"source": ["bioscape_plot"], "n": [1]}).to_parquet(f"{root}/summary.parquet")
+
+        df = read_all(root)
+        assert len(df) == 1 and set(df["obs_id"]) == {"x:1"}
+
+
 def test_upsert_idempotent() -> None:
     """Running the same ingest twice produces the same row count."""
     gdf = _make_gdf(
