@@ -5,10 +5,10 @@ window) → frozen head per token → per-pixel ``class_id`` + confidence + Maha
 OOD score → 3-band georeferenced COG. Same encoder and per-token representation as
 training (the center token the head learned), applied to *every* token.
 
-CRS is **not** hardcoded: it's taken from the Sentinel-2 data's native MGRS UTM zone
-(``proj:epsg``), so each tile/box comes out in its own correct projection — mosaic to
-a common CRS downstream. ``ponytail:`` non-overlapping windows; add overlap+blend for
-seams if it matters.
+Windows overlap 50% and are blended with a Hann edge-taper, so edge tokens (truncated
+context) don't leave 640 m seams. CRS is **not** hardcoded: it's taken from the
+Sentinel-2 data's native MGRS UTM zone (``proj:epsg``), so each box comes out in its
+own correct projection — mosaic to a common CRS downstream.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from loguru import logger
 from shapely.geometry import box as shp_box
 
 from cmrv.embeddings.base import MONTH_DOY
-from cmrv.embeddings.head import load_head, predict_dense
+from cmrv.embeddings.head import load_head, predict_probs
 from cmrv.embeddings.universat import UniverSatEmbedder
 from cmrv.ingest.chips import _query_items, _stac_client, _stack_items
 from cmrv.ingest.composite import _transform_from_da, monthly_median
@@ -54,6 +54,14 @@ def _composite_box(geom_wgs84, year, months_cfg, bands, cloud_cover_max):
     return np.stack(arrs), transform, epsg
 
 
+def _starts(n: int, win: int, stride: int) -> list[int]:
+    """Window start positions tiling ``[0, n)`` with overlap; last flush to the edge."""
+    s = list(range(0, max(n - win, 0) + 1, stride))
+    if n > win and s[-1] != n - win:
+        s.append(n - win)
+    return s
+
+
 def infer_box(
     bbox: tuple[float, float, float, float],
     ckpt_path: str,
@@ -63,10 +71,14 @@ def infer_box(
     pipeline: str = "configs/pipeline.yaml",
     device: str = "cpu",
 ) -> str:
-    """``(minlon, minlat, maxlon, maxlat)`` → 3-band (class, confidence, OOD) COG."""
+    """``(minlon, minlat, maxlon, maxlat)`` → 3-band (class, confidence, OOD) COG.
+
+    Overlapping 64 px windows with a Hann edge-taper: each output pixel is the blended
+    average of every window covering it, weighted toward window centres — so edge tokens
+    (truncated receptive field) contribute ~nothing and there are no 640 m window seams.
+    """
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
-
     stack, transform, epsg = _composite_box(
         shp_box(*bbox), year, months, bands, cfg.get("cloud_cover_max", 95)
     )
@@ -76,25 +88,40 @@ def infer_box(
     model, mu, sd, classes, ood = load_head(ckpt_path)
     enc = UniverSatEmbedder(pool="center", output_grid=CHIP_PX, device=device, batch=4)
     dvec = np.array([[MONTH_DOY[m["label"]] for m in months]])
+    k = len(classes)
 
-    cls_map = np.full((h, w), NODATA, dtype=np.uint8)
-    conf_map = np.zeros((h, w), dtype=np.uint8)
-    ood_map = np.zeros((h, w), dtype=np.uint8)
-    for r0 in range(0, h, CHIP_PX):
-        for c0 in range(0, w, CHIP_PX):
-            r1, c1 = min(r0 + CHIP_PX, h), min(c0 + CHIP_PX, w)
-            win = np.zeros((t, c, CHIP_PX, CHIP_PX), dtype="float32")  # zero-pad edge windows
-            win[:, :, : r1 - r0, : c1 - c0] = stack[:, :, r0:r1, c0:c1]
-            win = np.nan_to_num(win / 10000.0, nan=0.0)[None]  # scale + fill, (1,T,C,64,64)
-            grid = enc.embed_dense(win, dvec)[0]  # (64, 64, D)
-            cl, conf, oods = predict_dense(
-                model, mu, sd, classes, ood, grid.reshape(-1, grid.shape[-1])
-            )
-            sl = (slice(r0, r1), slice(c0, c1))
-            ch, cw = r1 - r0, c1 - c0
-            cls_map[sl] = cl.reshape(CHIP_PX, CHIP_PX)[:ch, :cw]
-            conf_map[sl] = (conf.reshape(CHIP_PX, CHIP_PX)[:ch, :cw] * 100).astype(np.uint8)
-            ood_map[sl] = (oods.reshape(CHIP_PX, CHIP_PX)[:ch, :cw] * 100).astype(np.uint8)
+    # reflect-pad so every output pixel can sit at a window centre; 50% overlap.
+    pad = stride = CHIP_PX // 2
+    padded = np.nan_to_num(
+        np.pad(stack, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="reflect") / 10000.0, nan=0.0
+    )
+    taper = np.outer(np.hanning(CHIP_PX), np.hanning(CHIP_PX)).astype("float32")  # ~0 at edges
+    prob_acc = np.zeros((h, w, k), "float32")
+    ood_acc = np.zeros((h, w), "float32")
+    wsum = np.zeros((h, w), "float32")
+
+    for r0 in _starts(h + 2 * pad, CHIP_PX, stride):
+        for c0 in _starts(w + 2 * pad, CHIP_PX, stride):
+            grid = enc.embed_dense(padded[None, :, :, r0 : r0 + CHIP_PX, c0 : c0 + CHIP_PX], dvec)[
+                0
+            ]
+            probs, oods = predict_probs(model, mu, sd, ood, grid.reshape(-1, grid.shape[-1]))
+            probs = probs.reshape(CHIP_PX, CHIP_PX, k)
+            oods = oods.reshape(CHIP_PX, CHIP_PX)
+            ar0, ac0 = r0 - pad, c0 - pad  # window footprint in (unpadded) output coords
+            rr0, rr1 = max(ar0, 0), min(ar0 + CHIP_PX, h)
+            cc0, cc1 = max(ac0, 0), min(ac0 + CHIP_PX, w)
+            wr, wc, hh, ww = rr0 - ar0, cc0 - ac0, rr1 - rr0, cc1 - cc0
+            tw = taper[wr : wr + hh, wc : wc + ww]
+            prob_acc[rr0:rr1, cc0:cc1] += probs[wr : wr + hh, wc : wc + ww] * tw[..., None]
+            ood_acc[rr0:rr1, cc0:cc1] += oods[wr : wr + hh, wc : wc + ww] * tw
+            wsum[rr0:rr1, cc0:cc1] += tw
+
+    wsum = np.maximum(wsum, 1e-6)
+    prob = prob_acc / wsum[..., None]
+    cls_map = classes[prob.argmax(2)].astype(np.uint8)
+    conf_map = (prob.max(2) * 100).astype(np.uint8)
+    ood_map = (np.clip(ood_acc / wsum, 0, 1) * 100).astype(np.uint8)
 
     write_cog(
         np.stack([cls_map, conf_map, ood_map]),
@@ -105,10 +132,10 @@ def infer_box(
         nodata=NODATA,
     )
     logger.success(
-        "wrote class/confidence/OOD COG ({}×{}, {} classes) @ EPSG:{} → {}",
+        "wrote class/confidence/OOD COG ({}×{}, {} classes, overlap-blended) @ EPSG:{} → {}",
         h,
         w,
-        len(classes),
+        k,
         epsg,
         out_uri,
     )
