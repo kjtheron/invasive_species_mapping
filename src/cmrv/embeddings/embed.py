@@ -62,7 +62,7 @@ def embed_chips(
     months: tuple[str, ...] = ("feb", "may", "sep"),
     scale: float = 1.0 / 10000,
     min_valid_frac: float = 0.5,
-    batch: int = 32,
+    batch: int = 8,
     num_workers: int = 4,
 ) -> str:
     """Embed every obs with all ``months`` present → single Zarr (emb + obs_id/block_id).
