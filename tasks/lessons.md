@@ -97,3 +97,13 @@ train/val/test fold files (the split is only useful if the loader reads it).
 baseline masks it — the worst kind of regression. Also: `read_all` now reads only
 dataset partition files (`root/<dataset>/*.parquet`), never root-level `summary.parquet`,
 which was inflating per-source counts by 1 and injecting a geometry-less phantom row.
+
+---
+
+## Never `to_zarr()` to a path you opened lazily — it corrupts the store
+
+**Rule:** `xr.open_zarr(p)` is lazy. Doing `ds = open_zarr(p); ds2 = ds.assign_coords(...); ds2.to_zarr(p, mode="w")` overwrites chunks while they're still being read back to write — it silently shreds the data (here: `emb` filled with NaN, `obs_id` emptied). zarr-v3 strings are fine; the in-place rewrite was the bug.
+
+**How to apply:** Write the cube **complete in one pass** (emb + obs_id + coords together, as `embed_chips` now does) so no post-hoc patch is needed. If you must add to an existing store, write to a *new* path and replace, or `.load()` into memory first to break the lazy link. Re-deriving row→obs_id order to "recover" a coord-less cube is unsafe (silent label misalignment) — re-embed instead.
+
+**Why this matters:** A corrupted training cube trains on garbage with no error. The empty-fold guard in `train_head` now turns the downstream symptom (obs_id join → empty fold) into a loud failure instead of a cryptic `argmax` error.

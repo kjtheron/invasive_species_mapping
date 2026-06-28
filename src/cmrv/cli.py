@@ -388,6 +388,25 @@ def embed(
     embed_chips(manifest, out, enc, batch=batch)
 
 
+def train_head(
+    emb: str = "data/embeddings/universat_center.zarr",
+    split: str = "data/chips/train/split.parquet",
+    arch: str = "linear",
+    weight: str = "balanced",
+) -> None:
+    """Train a light head on frozen embeddings + report per-class test metrics.
+
+    --arch: ``linear`` (bakeoff baseline) or ``mlp`` (1 hidden layer).
+    --weight: ``balanced`` (N/(K·n_c)), ``sqrt`` (gentler), or ``none``. Computed
+              live from the train fold, so it tracks label updates automatically.
+    """
+    from cmrv.embeddings.head import train_head as _train
+
+    per, macro = _train(emb, split, arch=arch, weight=weight)
+    print(per.to_string(index=False))
+    logger.success("{} head ({} CE): test macro-F1 = {:.3f}", arch, weight, macro)
+
+
 def main() -> None:
     tyro.extras.subcommand_cli_from_dict(
         {
@@ -402,6 +421,7 @@ def main() -> None:
             "ingest-chips": ingest_chips,
             "make-split": chips_make_split,
             "embed": embed,
+            "train-head": train_head,
         }
     )
 

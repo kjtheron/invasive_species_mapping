@@ -93,3 +93,30 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
     assert set(ds["block_id"].values) == {7}
     assert ds.attrs["crs"] == "EPSG:4326"  # zone-agnostic point index
     assert {"lon", "lat"} <= set(ds.coords) and bool(np.isfinite(ds["lon"].values).all())
+
+
+def test_train_head_separates_synthetic(tmp_path):
+    """A linear head must separate two linearly-separable classes across folds."""
+    import pandas as pd
+    import xarray as xr
+
+    from cmrv.embeddings.head import train_head
+
+    rng = np.random.default_rng(0)
+    n = 80
+    y = np.tile([0, 1], n // 2)
+    X = rng.normal(0, 0.1, (n, 8)).astype("float32")
+    X[y == 0, 0] += 5.0
+    X[y == 1, 1] += 5.0
+    obs = [f"o{i}" for i in range(n)]
+    xr.Dataset({"emb": (("obs", "feat"), X)}, coords={"obs_id": ("obs", np.array(obs))}).to_zarr(
+        tmp_path / "e.zarr"
+    )
+    folds = np.array((["train", "train", "val", "test"] * n)[:n])
+    pd.DataFrame({"obs_id": obs, "fold": folds, "class_id": y}).to_parquet(tmp_path / "s.parquet")
+
+    per, macro = train_head(
+        str(tmp_path / "e.zarr"), str(tmp_path / "s.parquet"), arch="linear", epochs=200
+    )
+    assert macro > 0.8
+    assert set(per["class_id"]) == {0, 1}
