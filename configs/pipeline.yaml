@@ -26,7 +26,3 @@ s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
 # so this is set permissively (95) — letting more candidate scenes into the
 # monthly median, after which SCL strips the bad pixels per-scene.
 cloud_cover_max: 95
-
-paths:
-  tiles: data/aoi/processed/tiles.parquet
-  raw_prefix: data/raw

@@ -65,11 +65,14 @@ make-split              Filter by --species (optional), assign train/val/test fo
 | `aoi-tiles` | Build the 10 km UTM-34S tile grid (inference unit). |
 | `labels-bioscape-ingest` | BioSCape VegPlots (line + plot, species-level) → `processed/BioSCape_VegPlots_Berg_Eerste_2425/`. |
 | `labels-mapwaps-ingest` | MapWAPS Olifants-Doring (~28k field points, genus-level) → `processed/mapwaps_olifants_doring/`. |
+| `labels-sanlc-ingest` | SANLC 2018/20/22 accuracy points + VegMap biome (native + transformed classes) → `processed/sanlc_accuracy_points/`. |
 | `labels` | Inspect the obs store (counts + coverage); `--aoi`/`--species` previews filtered labels, `--out` writes them. |
-| `ingest-month` | MPC STAC → SCL mask → monthly median → per-tile 10 m COG (inference imagery). |
-| `ingest-chips` | Thin, then 64×64 chips per (obs_id, month); manifest-based incremental resume. |
+| `ingest-chips` | Thin, then 64×64 chips per (obs_id, month); manifest-based incremental resume + self-reconcile. |
 | `chips-stats` | Explore the chip manifest. |
-| `make-split` | Spatial-block train/val/test split; `--class-map-name` assigns `class_id`. |
+| `make-split` | Spatial-block (iterative-stratification) split on `class_id`; `--class-map-name`, `--min-class-obs`; writes `split.parquet`. |
+| `embed` | UniverSat center-token embeddings → single lon/lat-indexed Zarr cube (`--device cpu|cuda`). |
+| `train-head` | Train linear/MLP head on the cube → per-class test metrics; `--save` a checkpoint. |
+| `infer` | Wall-to-wall: box → 3-month composite → dense embed → head → class/confidence/OOD COG. |
 
 ## Common workflows
 
