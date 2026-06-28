@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
-import rasterio
 import xarray as xr
 
 from cmrv.ingest.chips import _reconcile_manifest, _window_medians
 from cmrv.ingest.cloud_mask import BAD_SCL, apply_scl_mask
-from cmrv.ingest.composite import monthly_median, write_composite_cog
+from cmrv.ingest.composite import monthly_median
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,22 +26,6 @@ def _make_da_with_scl(scl_values: np.ndarray) -> xr.DataArray:
         data,
         dims=["time", "band", "y", "x"],
         coords={"band": ["B02", "SCL"]},
-    )
-
-
-def _make_composite(bands: int = 3, H: int = 16, W: int = 16) -> xr.DataArray:
-    """Synthetic (band, y, x) composite with UTM-like x/y coordinates."""
-    arr = np.random.default_rng(42).random((bands, H, W)).astype("float32")
-    y_coords = np.linspace(6_240_500.0, 6_240_500.0 - (H - 1) * 10.0, H)
-    x_coords = np.linspace(230_000.0, 230_000.0 + (W - 1) * 10.0, W)
-    return xr.DataArray(
-        arr,
-        dims=["band", "y", "x"],
-        coords={
-            "band": [f"B0{i}" for i in range(bands)],
-            "y": y_coords,
-            "x": x_coords,
-        },
     )
 
 
@@ -148,54 +128,6 @@ class TestMonthlyMedian:
         da = xr.DataArray(arr, dims=["time", "band", "y", "x"])
         result = monthly_median(da)
         assert np.isnan(result.values).all()
-
-
-# ---------------------------------------------------------------------------
-# write_composite_cog
-# ---------------------------------------------------------------------------
-
-
-class TestWriteCompositeCog:
-    def test_writes_valid_geotiff(self) -> None:
-        composite = _make_composite(bands=10, H=32, W=32)
-        with tempfile.TemporaryDirectory() as tmp:
-            out = str(Path(tmp) / "composite.tif")
-            write_composite_cog(composite, out)
-            assert Path(out).exists()
-            with rasterio.open(out) as src:
-                assert src.count == 10
-                assert src.dtypes[0] == "float32"
-                assert src.crs.to_epsg() == 32734
-                data = src.read()
-                assert data.shape == (10, 32, 32)
-
-    def test_cog_passes_rio_cogeo_validate(self) -> None:
-        from rio_cogeo.cogeo import cog_validate
-
-        composite = _make_composite(bands=3, H=64, W=64)
-        with tempfile.TemporaryDirectory() as tmp:
-            out = str(Path(tmp) / "composite.tif")
-            write_composite_cog(composite, out)
-            is_valid, _, _ = cog_validate(out)
-            assert is_valid, "COG failed rio-cogeo validation"
-
-    def test_nodata_preserved(self) -> None:
-        composite = _make_composite(bands=1, H=16, W=16)
-        with tempfile.TemporaryDirectory() as tmp:
-            out = str(Path(tmp) / "nodata.tif")
-            write_composite_cog(composite, out, nodata=-9999.0)
-            with rasterio.open(out) as src:
-                assert src.nodata == pytest.approx(-9999.0)
-
-    def test_2d_array_written_as_single_band(self) -> None:
-        """A (y, x) DataArray (squeezed single band) is written as 1-band GeoTIFF."""
-        composite = _make_composite(bands=1, H=16, W=16).squeeze("band", drop=True)
-        assert composite.ndim == 2
-        with tempfile.TemporaryDirectory() as tmp:
-            out = str(Path(tmp) / "single.tif")
-            write_composite_cog(composite, out)
-            with rasterio.open(out) as src:
-                assert src.count == 1
 
 
 # ---------------------------------------------------------------------------

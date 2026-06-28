@@ -16,7 +16,7 @@ from cmrv.ingest.chips import (
     make_split,
     thin_labels,
 )
-from cmrv.ingest.composite import load_pipeline_config, run_ingest
+from cmrv.ingest.composite import load_pipeline_config
 from cmrv.io import read_gdf, write_gdf_parquet
 from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
 from cmrv.labels.mapwaps import ingest_mapwaps
@@ -153,27 +153,6 @@ def labels_inspect(
     if out and not gdf.empty:
         write_gdf_parquet(gdf, out)
         logger.success("wrote → {}", out)
-
-
-def ingest_month(
-    month: str | None = None,
-    tile_id: int | None = None,
-    pipeline: str = "configs/pipeline.yaml",
-) -> None:
-    """Download S2 L2A composites → 10 m COGs (Stage 2 — inference imagery).
-
-    Queries Microsoft Planetary Computer (no subscription key required),
-    applies SCL cloud masking, computes monthly pixel-wise median, and writes
-    a Cloud-Optimized GeoTIFF to ``<raw_prefix>/tile_id=<N>/<month_label>.tif``.
-
-    --month: label from pipeline.yaml (e.g. ``feb``). Omit to run all months.
-    --tile-id: single tile to process. Omit to run all tiles.
-    """
-    cfg = load_pipeline_config(pipeline)
-    uris = run_ingest(cfg, month_label=month, tile_id=tile_id)
-    logger.success("ingest-month complete — {} COG(s) written", len(uris))
-    for u in uris:
-        logger.info("  {}", u)
 
 
 def ingest_chips(
@@ -447,7 +426,6 @@ def main() -> None:
             "labels-sanlc-ingest": labels_sanlc_ingest,
             "labels": labels_inspect,
             "chips-stats": chips_stats,
-            "ingest-month": ingest_month,
             "ingest-chips": ingest_chips,
             "make-split": chips_make_split,
             "embed": embed,

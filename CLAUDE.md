@@ -115,9 +115,11 @@ chips-stats            → species × spatial × temporal stats from the manifes
 make-split             → spatial-block train/val/test split + --class-map → class_id
 ```
 
-Per-tile imagery + downstream: `aoi-wc` / `aoi-tiles` (once), `ingest-month`
-(S2 composites for inference), then SR → embed → train → infer (later stages).
-Months for the chip stack are **Feb/May/Sep** (WC phenology — see `pipeline.yaml`).
+Downstream: `aoi-wc` / `aoi-tiles` (once), then `embed` (UniverSat cube) →
+`train-head` (linear/MLP + `--save`) → `infer` (wall-to-wall triplet COG).
+Compositing is inline — `ingest-chips` (training windows) and `infer` (inference
+boxes) each build their own S2 composite; there is no separate composite-to-disk
+step. Months for the chip stack are **Feb/May/Sep** (WC phenology — see `pipeline.yaml`).
 
 ## Common tripwires
 

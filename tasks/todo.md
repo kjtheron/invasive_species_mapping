@@ -11,7 +11,7 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 ## Completed
 
 - **AOI & tile grid** — `cmrv aoi-wc`, `aoi-tiles` → `data/aoi/*.parquet` (WC; tiles = inference unit)
-- **S2 ingest** — `cmrv ingest-month` (MPC STAC → SCL mask → monthly median → COG)
+- **S2 compositing** — inline in `ingest-chips` (training windows) + `infer` (inference boxes): MPC STAC → SCL mask → monthly median (no separate composite-to-disk step)
 - **Label adapters (3)** — `labels-bioscape-ingest` (VegPlots), `labels-mapwaps-ingest`
   (Olifants-Doring IAP genera), `labels-sanlc-ingest` (SANLC 2018/20/22 accuracy points
   + VegMap biome). IAP membership from class-map `members[]`.
