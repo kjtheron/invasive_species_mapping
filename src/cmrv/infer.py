@@ -62,6 +62,31 @@ def _starts(n: int, win: int, stride: int) -> list[int]:
     return s
 
 
+def _d4_ops(tta: bool):
+    """Dihedral (flip × 90° rotation) augmentations as ``(fwd, inv)`` pairs.
+
+    ``fwd`` transforms an input's spatial last-2 axes; ``inv`` applies the inverse to a
+    prediction's spatial first-2 axes, bringing probs back to the original frame. Land
+    cover is flip/rotation-invariant, so averaging the 8 views de-noises the prediction.
+    ``tta=False`` → identity only.
+    """
+    if not tta:
+        return [(lambda x: x, lambda p: p)]
+    ops = []
+    for flip in (False, True):
+        for k in range(4):
+
+            def fwd(x, k=k, flip=flip):
+                return np.rot90(np.flip(x, axis=-1) if flip else x, k, axes=(-2, -1))
+
+            def inv(p, k=k, flip=flip):
+                p = np.rot90(p, -k, axes=(0, 1))
+                return np.flip(p, axis=1) if flip else p
+
+            ops.append((fwd, inv))
+    return ops
+
+
 def infer_box(
     bbox: tuple[float, float, float, float],
     ckpt_path: str,
@@ -70,12 +95,14 @@ def infer_box(
     year: int = 2023,
     pipeline: str = "configs/pipeline.yaml",
     device: str = "cpu",
+    tta: bool = False,
 ) -> str:
     """``(minlon, minlat, maxlon, maxlat)`` → 3-band (class, confidence, OOD) COG.
 
     Overlapping 64 px windows with a Hann edge-taper: each output pixel is the blended
     average of every window covering it, weighted toward window centres — so edge tokens
     (truncated receptive field) contribute ~nothing and there are no 640 m window seams.
+    ``tta`` averages 8 dihedral (flip/rotation) views per window — more robust, 8× slower.
     """
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
@@ -96,18 +123,23 @@ def infer_box(
         np.pad(stack, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="reflect") / 10000.0, nan=0.0
     )
     taper = np.outer(np.hanning(CHIP_PX), np.hanning(CHIP_PX)).astype("float32")  # ~0 at edges
+    ops = _d4_ops(tta)
     prob_acc = np.zeros((h, w, k), "float32")
     ood_acc = np.zeros((h, w), "float32")
     wsum = np.zeros((h, w), "float32")
 
     for r0 in _starts(h + 2 * pad, CHIP_PX, stride):
         for c0 in _starts(w + 2 * pad, CHIP_PX, stride):
-            grid = enc.embed_dense(padded[None, :, :, r0 : r0 + CHIP_PX, c0 : c0 + CHIP_PX], dvec)[
-                0
-            ]
-            probs, oods = predict_probs(model, mu, sd, ood, grid.reshape(-1, grid.shape[-1]))
-            probs = probs.reshape(CHIP_PX, CHIP_PX, k)
-            oods = oods.reshape(CHIP_PX, CHIP_PX)
+            win = padded[None, :, :, r0 : r0 + CHIP_PX, c0 : c0 + CHIP_PX]
+            probs = np.zeros((CHIP_PX, CHIP_PX, k), "float32")
+            oods = np.zeros((CHIP_PX, CHIP_PX), "float32")
+            for fwd, inv in ops:  # test-time augmentation: average dihedral views
+                grid = enc.embed_dense(np.ascontiguousarray(fwd(win)), dvec)[0]
+                pr, od = predict_probs(model, mu, sd, ood, grid.reshape(-1, grid.shape[-1]))
+                probs += inv(pr.reshape(CHIP_PX, CHIP_PX, k))
+                oods += inv(od.reshape(CHIP_PX, CHIP_PX, 1))[..., 0]
+            probs /= len(ops)
+            oods /= len(ops)
             ar0, ac0 = r0 - pad, c0 - pad  # window footprint in (unpadded) output coords
             rr0, rr1 = max(ar0, 0), min(ar0 + CHIP_PX, h)
             cc0, cc1 = max(ac0, 0), min(ac0 + CHIP_PX, w)

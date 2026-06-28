@@ -121,3 +121,15 @@ def test_train_head_separates_synthetic(tmp_path):
     assert conf.shape == y.shape and ood_score.shape == y.shape
     assert ood_score.min() >= 0 and ood_score.max() <= 1  # normalized OOD score
     assert (ood_score < 0.5).mean() > 0.8  # in-distribution points mostly not flagged
+
+
+def test_d4_ops_roundtrip():
+    """Each dihedral (fwd, inv) pair must invert: inv∘fwd = identity on the spatial grid."""
+    from cmrv.infer import _d4_ops
+
+    a = np.random.default_rng(0).random((6, 6)).astype("float32")
+    for fwd, inv in _d4_ops(tta=True):
+        aug = fwd(a[None, None, None])[0, 0, 0]  # transform as input-spatial (last-2 axes)
+        back = inv(aug[..., None])[..., 0]  # inverse as probs-spatial (first-2 axes)
+        assert np.allclose(back, a)
+    assert len(_d4_ops(tta=True)) == 8 and len(_d4_ops(tta=False)) == 1
