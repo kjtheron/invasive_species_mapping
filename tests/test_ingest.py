@@ -6,11 +6,12 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
 import xarray as xr
 
-from cmrv.ingest.chips import _window_medians
+from cmrv.ingest.chips import _reconcile_manifest, _window_medians
 from cmrv.ingest.cloud_mask import BAD_SCL, apply_scl_mask
 from cmrv.ingest.composite import monthly_median, write_composite_cog
 
@@ -248,3 +249,24 @@ def test_thin_labels_order_independent_and_stable() -> None:
     assert a == b  # independent of input row order
     assert "obs0" in a  # survivor = smallest obs_id in the cell
     assert len(a) < 8  # near-duplicates collapsed
+
+
+def test_reconcile_manifest_prunes_thinned_out_obs(tmp_path):
+    """Stale obs (not in the thinned set) lose their chips + manifest rows."""
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "drop").mkdir()
+    ck = tmp_path / "keep" / "feb.tif"
+    cd = tmp_path / "drop" / "feb.tif"
+    ck.write_bytes(b"x")
+    cd.write_bytes(b"x")
+    man = pd.DataFrame(
+        {"obs_id": ["keep", "drop"], "chip_uri": [str(ck), str(cd)], "month_label": ["feb", "feb"]}
+    )
+    muri = str(tmp_path / "manifest.parquet")
+
+    kept = _reconcile_manifest(man, {"keep"}, muri)
+
+    assert set(kept["obs_id"]) == {"keep"}
+    assert ck.exists() and not cd.exists()  # stale chip file deleted
+    assert not (tmp_path / "drop").exists()  # emptied obs dir removed
+    assert set(pd.read_parquet(muri)["obs_id"]) == {"keep"}  # manifest rewritten
