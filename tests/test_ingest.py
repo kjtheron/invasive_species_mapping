@@ -270,3 +270,25 @@ def test_reconcile_manifest_prunes_thinned_out_obs(tmp_path):
     assert ck.exists() and not cd.exists()  # stale chip file deleted
     assert not (tmp_path / "drop").exists()  # emptied obs dir removed
     assert set(pd.read_parquet(muri)["obs_id"]) == {"keep"}  # manifest rewritten
+
+
+def test_iterative_stratification_spreads_class_across_folds():
+    """A class spanning many blocks must reach all 3 folds, not pile into train."""
+    import geopandas as gpd
+    from shapely.geometry import Point, box
+
+    from cmrv.ingest.chips import stratified_spatial_split
+
+    blocks = gpd.GeoDataFrame(
+        {"block_id": range(20)},
+        geometry=[box(i, 0, i + 1, 1) for i in range(20)],
+        crs="EPSG:4326",
+    )
+    rows = [{"obs_id": f"c{i}", "class_id": 0, "geometry": Point(i + 0.5, 0.5)} for i in range(20)]
+    rows += [{"obs_id": f"r{i}", "class_id": 1, "geometry": Point(i + 0.5, 0.5)} for i in range(3)]
+    labels = gpd.GeoDataFrame(rows, crs="EPSG:4326")
+
+    out, b2f = stratified_spatial_split(labels, blocks, species_col="class_id", seed=0)
+
+    assert set(out.loc[out["class_id"] == 0, "fold"]) == {"train", "val", "test"}
+    assert set(b2f.values()) <= {"train", "val", "test"}

@@ -143,12 +143,15 @@ def stratified_spatial_split(
 ) -> tuple[gpd.GeoDataFrame, dict[int, str]]:
     """Assign each label a ``fold`` (train/val/test) via spatial blocks.
 
-    If ``existing_block_folds`` is provided, those blocks keep their fold
-    assignment.  Only new blocks go through the greedy algorithm, seeded
-    with the existing fold counts so proportions stay balanced.
+    **Iterative stratification** (Sechidis et al. 2011): each block is a
+    multi-label item (its per-class label counts); blocks are assigned rarest-class
+    first, each to the fold most short of that class. Whole blocks stay intact (no
+    spatial leakage), yet every class with enough blocks is spread ~train/val/test
+    instead of piling into train. Stratify on ``species_col`` — pass ``class_id``
+    to balance the actual training target.
 
-    Returns ``(labels, block_to_fold)`` — labels with ``block_id`` and
-    ``fold`` columns, and the full block→fold mapping for persistence.
+    ``existing_block_folds`` locks those blocks (debiting their share from the
+    quotas); only new blocks are assigned. Returns ``(labels, block_to_fold)``.
     """
     folds = {"train": train_frac, "val": val_frac, "test": 1 - train_frac - val_frac}
 
@@ -159,81 +162,46 @@ def stratified_spatial_split(
     if "index_right" in labels.columns:
         labels = labels.drop(columns=["index_right"])
 
-    # per-block species matrix
-    block_species = labels.groupby(["block_id", species_col]).size().unstack(fill_value=0)
-    all_species = block_species.columns.tolist()
-
-    # global species totals — used to compute rarity
-    species_total = block_species.sum(axis=0)
-
-    # separate locked (existing) vs new blocks
-    existing_block_folds = existing_block_folds or {}
-    locked_bids = set(existing_block_folds.keys()) & set(block_species.index)
-    new_bids = set(block_species.index) - locked_bids
-
-    # seed fold counts from locked blocks
-    fold_counts: dict[str, pd.Series] = {
-        f: pd.Series(0, index=all_species, dtype=int) for f in folds
-    }
-    fold_totals: dict[str, int] = {f: 0 for f in folds}
+    # block × class count matrix; desired[fold] = each fold's remaining per-class quota
+    mat = labels.groupby(["block_id", species_col]).size().unstack(fill_value=0)
+    desired = {f: mat.sum(axis=0) * fr for f, fr in folds.items()}
+    desired_total = {f: float(mat.values.sum()) * fr for f, fr in folds.items()}
     block_to_fold: dict[int, str] = {}
 
-    for bid in locked_bids:
-        fold = existing_block_folds[bid]
-        block_to_fold[bid] = fold
-        row = block_species.loc[bid]
-        fold_counts[fold] = fold_counts[fold].add(row, fill_value=0).astype(int)
-        fold_totals[fold] += int(row.sum())
-
-    if locked_bids:
+    # Lock existing blocks first, debiting their labels from the quotas.
+    existing_block_folds = existing_block_folds or {}
+    locked = set(existing_block_folds) & set(mat.index)
+    for bid in locked:
+        f = existing_block_folds[bid]
+        block_to_fold[bid] = f
+        desired[f] = desired[f] - mat.loc[bid]
+        desired_total[f] -= float(mat.loc[bid].sum())
+    if locked:
         logger.info(
-            "spatial split: {} blocks locked, {} new blocks to assign",
-            len(locked_bids),
-            len(new_bids),
+            "spatial split: {} blocks locked, {} to assign", len(locked), len(mat) - len(locked)
         )
 
-    # greedy assignment for new blocks only
+    # Iterative stratification: take the rarest remaining class, and send each of
+    # its blocks to the fold most short of that class (tie → most short overall →
+    # random). Rare classes placed first can't get starved by the common ones.
     rng = np.random.default_rng(seed)
-    if new_bids:
-        new_block_species = block_species.loc[list(new_bids)]
-        block_rarity = new_block_species.apply(
-            lambda row: species_total[row > 0].min() if (row > 0).any() else float("inf"),
-            axis=1,
-        )
-        # shuffle within rarity tiers so different seeds → different splits
-        noise = rng.uniform(0, 1e-10, size=len(block_rarity))
-        block_order = (block_rarity + noise).sort_values().index.tolist()
-    else:
-        block_order = []
-
-    total_labels = len(labels)
-
-    for bid in block_order:
-        row = block_species.loc[bid]
-        best_fold = None
-        best_score = -float("inf")
-
-        for f, target_frac in folds.items():
-            target_n = target_frac * total_labels
-            headroom = target_n - fold_totals[f]
-            if headroom <= 0:
-                continue
-
-            projected = fold_counts[f] + row
-            projected_frac = projected / projected.sum().clip(1)
-            global_frac = species_total / species_total.sum()
-            kl = (projected_frac * np.log((projected_frac + 1e-10) / (global_frac + 1e-10))).sum()
-            score = headroom - kl * total_labels
-            if score > best_score:
-                best_score = score
-                best_fold = f
-
-        if best_fold is None:
-            best_fold = min(fold_totals, key=fold_totals.get)
-
-        block_to_fold[bid] = best_fold
-        fold_counts[best_fold] += row
-        fold_totals[best_fold] += int(row.sum())
+    remaining = mat.drop(index=list(locked))
+    while len(remaining):
+        active = remaining.sum(axis=0).pipe(lambda s: s[s > 0])
+        if active.empty:  # label-less blocks (shouldn't survive thinning) → emptiest fold
+            for bid in remaining.index:
+                block_to_fold[bid] = max(desired_total, key=desired_total.get)
+            break
+        c = active.idxmin()
+        bids = remaining.index[remaining[c] > 0].tolist()
+        rng.shuffle(bids)
+        for bid in bids:
+            row = remaining.loc[bid]
+            best = max(folds, key=lambda f: (desired[f][c], desired_total[f], rng.random()))
+            block_to_fold[bid] = best
+            desired[best] = desired[best] - row
+            desired_total[best] -= float(row.sum())
+        remaining = remaining.drop(index=bids)
 
     labels["fold"] = labels["block_id"].map(block_to_fold)
 
@@ -912,6 +880,7 @@ def make_split(
     block_km: float = 10.0,
     train_frac: float = 0.70,
     val_frac: float = 0.15,
+    min_class_obs: int = 0,
     out_prefix: str | None = None,
     lock_folds: bool = True,
 ) -> pd.DataFrame:
@@ -998,6 +967,53 @@ def make_split(
     )
     label_pts.rename(columns={"species": "species_normalized"}, inplace=True)
 
+    # Resolve class_id BEFORE the split so we stratify on the actual training
+    # target (not raw species), drop unmapped species, and drop tiny classes —
+    # otherwise a spatially-clustered class can pile entirely into one fold.
+    strat_col = "species_normalized"
+    if class_map_name:
+        from cmrv.labels.classmap import build_lookup
+
+        cm = build_lookup(schema_path, class_map_name)
+        sp = label_pts["species_normalized"].str.lower().str.strip()
+        cid = sp.map(cm.binomial_to_class)
+        if cm.genus_to_class:
+            miss = cid.isna()
+            cid.loc[miss] = sp[miss].str.split().str[0].map(cm.genus_to_class)
+        label_pts["class_id"] = cid
+
+        unmapped = label_pts["class_id"].isna()
+        if unmapped.any():
+            names = sorted(label_pts.loc[unmapped, "species_normalized"].dropna().unique())
+            if species:  # explicit species set → class_map is a labelling shim, keep them
+                logger.warning(
+                    "class_map '{}': {} unmapped obs KEPT (match --species): {}",
+                    class_map_name,
+                    int(unmapped.sum()),
+                    names[:10],
+                )
+                label_pts["class_id"] = label_pts["class_id"].fillna(-1)
+            else:
+                logger.warning(
+                    "class_map '{}': dropping {} unmapped obs ({} species): {}",
+                    class_map_name,
+                    int(unmapped.sum()),
+                    len(names),
+                    names[:10],
+                )
+                label_pts = label_pts[~unmapped]
+
+        if min_class_obs > 0:
+            counts = label_pts["class_id"].value_counts()
+            tiny = sorted(counts.index[counts < min_class_obs])
+            if tiny:
+                logger.warning(
+                    "dropping {} classes with <{} obs: {}", len(tiny), min_class_obs, tiny
+                )
+                label_pts = label_pts[~label_pts["class_id"].isin(tiny)]
+        label_pts["class_id"] = label_pts["class_id"].astype(int)
+        strat_col = "class_id"
+
     existing_folds = None
     if lock_folds and out_prefix:
         existing_folds = _load_block_folds(f"{out_prefix}/block_folds.parquet")
@@ -1005,68 +1021,25 @@ def make_split(
     label_pts, block_to_fold = stratified_spatial_split(
         _labels_to_gdf(label_pts, manifest),
         blocks,
+        species_col=strat_col,
         train_frac=train_frac,
         val_frac=val_frac,
         seed=seed,
         existing_block_folds=existing_folds,
     )
 
-    fold_map = label_pts.set_index("obs_id")["fold"].to_dict()
-    manifest["fold"] = manifest["obs_id"].map(fold_map)
+    # Inner-merge restricts the manifest to surviving obs (drops unmapped / tiny /
+    # out-of-AOI) and attaches fold + class_id in one step.
+    keep_cols = ["obs_id", "fold"] + (["class_id"] if class_map_name else [])
+    manifest = manifest.merge(
+        label_pts[keep_cols].drop_duplicates("obs_id"), on="obs_id", how="inner"
+    )
 
-    orphan = manifest["fold"].isna().sum()
-    if orphan > 0:
-        logger.warning("{} manifest rows have no fold (block outside AOI?)", orphan)
-        manifest = manifest.dropna(subset=["fold"])
-
-    # --- genus/species → class_id collapsing ---
-    # Behaviour:
-    #   - No --species filter: drop unmapped (default conservative — unmapped
-    #     species shouldn't sneak into a class_map-driven training run).
-    #   - --species explicit: warn but KEEP unmapped (user opted into those
-    #     species; class_map is then a labelling shim, not a gatekeeper).
     if class_map_name:
-        from cmrv.labels.classmap import build_lookup
-
-        classmap = build_lookup(schema_path, class_map_name)
-        binomial = classmap.binomial_to_class
-        genus_lookup = classmap.genus_to_class
-
-        species_lower = manifest["species"].str.lower().str.strip()
-        manifest["class_id"] = species_lower.map(binomial)
-        unresolved = manifest["class_id"].isna()
-        if unresolved.any() and genus_lookup:
-            genus_hit = species_lower[unresolved].str.split().str[0].map(genus_lookup)
-            manifest.loc[unresolved, "class_id"] = genus_hit
-
-        n_unmapped = manifest["class_id"].isna().sum()
-        if n_unmapped:
-            unmapped_sp = sorted(manifest.loc[manifest["class_id"].isna(), "species"].unique())
-            if species:
-                logger.warning(
-                    "class_map '{}': {} rows ({} species) have no class_id "
-                    "but match --species — KEPT (no class_id assigned): {}",
-                    class_map_name,
-                    n_unmapped,
-                    len(unmapped_sp),
-                    unmapped_sp[:10],
-                )
-            else:
-                logger.warning(
-                    "class_map '{}': {} rows ({} species) have no class_id — dropped: {}",
-                    class_map_name,
-                    n_unmapped,
-                    len(unmapped_sp),
-                    unmapped_sp[:10],
-                )
-                manifest = manifest.dropna(subset=["class_id"])
-
-        if not manifest["class_id"].isna().any():
-            manifest["class_id"] = manifest["class_id"].astype(int)
         logger.info(
             "class_map '{}': {} classes, {} obs_ids retained",
             class_map_name,
-            manifest["class_id"].nunique(dropna=True),
+            manifest["class_id"].nunique(),
             manifest["obs_id"].nunique(),
         )
 
