@@ -51,6 +51,32 @@ def _class_weights(counts: np.ndarray, scheme: str) -> np.ndarray:
     return np.ones(k, dtype="float32")
 
 
+def _maha(z: np.ndarray, means: np.ndarray, prec: np.ndarray) -> np.ndarray:
+    """Min Mahalanobis² distance of each row of ``z`` (N,D) to the class means (K,D)."""
+    zpz = (z @ prec * z).sum(1)  # (N,)
+    pmu = means @ prec  # (K, D)
+    cross = z @ pmu.T  # (N, K)
+    const = (pmu * means).sum(1)  # (K,)
+    return (zpz[:, None] - 2 * cross + const[None, :]).min(1)
+
+
+def _ood_stats(
+    xfit: np.ndarray, yfit: np.ndarray, xthr: np.ndarray, k: int, eps: float = 1e-3
+) -> dict:
+    """Per-class means + shared precision + distance threshold (Mahalanobis OOD).
+
+    Lee et al. 2018: fit a Gaussian per class with a pooled within-class covariance;
+    a pixel far from every class mean (distance > threshold) is novel / not-IAP. The
+    threshold is the 97.5-pct of distances on the **held-out** ``xthr`` (out-of-sample),
+    not the in-sample fit set — in-sample distances are far too tight and over-flag.
+    """
+    means = np.stack([xfit[yfit == c].mean(0) for c in range(k)]).astype("float32")
+    cov = np.cov(xfit - means[yfit], rowvar=False) + eps * np.eye(xfit.shape[1])
+    prec = np.linalg.inv(cov).astype("float32")
+    thr = float(np.quantile(_maha(xthr.astype("float32"), means, prec), 0.975))
+    return {"means": means, "prec": prec, "threshold": thr}
+
+
 def _build_model(arch: str, in_dim: int, k: int, hidden: int):
     """Linear or 1-hidden-layer MLP — shared by training and the inference reload."""
     import torch
@@ -151,6 +177,9 @@ def train_head(
     if save:
         from cmrv.io import ensure_parent
 
+        ood = _ood_stats(
+            ((xtr - mu) / sd).astype("float32"), ytr, ((xva - mu) / sd).astype("float32"), k
+        )
         ensure_parent(save)
         torch.save(
             {
@@ -161,28 +190,35 @@ def train_head(
                 "arch": arch,
                 "in_dim": int(emb.shape[1]),
                 "hidden": hidden,
+                "ood": ood,
             },
             save,
         )
-        logger.success("saved head → {}", save)
+        logger.success("saved head (+ OOD stats) → {}", save)
     return per, macro
 
 
 def load_head(ckpt_path: str):
-    """Load a saved head → ``(model.eval(), mu, sd, class_ids)`` for inference."""
+    """Load a saved head → ``(model.eval(), mu, sd, class_ids, ood)`` for inference."""
     import torch
 
     ck = torch.load(ckpt_path, weights_only=False)
     model = _build_model(ck["arch"], ck["in_dim"], len(ck["classes"]), ck["hidden"])
     model.load_state_dict(ck["state_dict"])
     model.eval()
-    return model, ck["mu"], ck["sd"], np.asarray(ck["classes"])
+    return model, ck["mu"], ck["sd"], np.asarray(ck["classes"]), ck["ood"]
 
 
-def predict(model, mu, sd, classes: np.ndarray, x: np.ndarray) -> np.ndarray:
-    """Standardize features ``(N, D)`` → predicted class_ids ``(N,)``."""
+def predict_dense(model, mu, sd, classes: np.ndarray, ood: dict, x: np.ndarray):
+    """Features ``(N, D)`` → ``(class_ids, confidence 0-1, ood_score 0-1)``.
+
+    confidence = max softmax probability; ood_score = Mahalanobis distance / threshold,
+    scaled so 0.5 = the train 97.5-pct cutoff (``>0.5`` ⇒ novel / not-IAP).
+    """
     import torch
 
+    xstd = ((x - mu) / sd).astype("float32")
     with torch.no_grad():
-        idx = model(torch.tensor((x - mu) / sd, dtype=torch.float32)).argmax(1).numpy()
-    return classes[idx]
+        prob = torch.softmax(model(torch.tensor(xstd)), dim=1).numpy()
+    d = _maha(xstd, ood["means"], ood["prec"])
+    return classes[prob.argmax(1)], prob.max(1), np.clip(d / ood["threshold"], 0, 2) / 2

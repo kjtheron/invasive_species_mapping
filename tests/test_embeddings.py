@@ -113,7 +113,11 @@ def test_train_head_separates_synthetic(tmp_path):
     assert set(per["class_id"]) == {0, 1}
 
     # save → load → predict round-trip (the inference path) recovers the labels
-    from cmrv.embeddings.head import load_head, predict
+    from cmrv.embeddings.head import load_head, predict_dense
 
-    model, mu, sd, classes = load_head(ckpt)
-    assert (predict(model, mu, sd, classes, X) == y).mean() > 0.8
+    model, mu, sd, classes, ood = load_head(ckpt)
+    cls, conf, ood_score = predict_dense(model, mu, sd, classes, ood, X)
+    assert (cls == y).mean() > 0.8
+    assert conf.shape == y.shape and ood_score.shape == y.shape
+    assert ood_score.min() >= 0 and ood_score.max() <= 1  # normalized OOD score
+    assert (ood_score < 0.5).mean() > 0.8  # in-distribution points mostly not flagged
