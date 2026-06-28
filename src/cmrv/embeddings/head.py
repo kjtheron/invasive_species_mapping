@@ -51,6 +51,22 @@ def _class_weights(counts: np.ndarray, scheme: str) -> np.ndarray:
     return np.ones(k, dtype="float32")
 
 
+def _build_model(arch: str, in_dim: int, k: int, hidden: int):
+    """Linear or 1-hidden-layer MLP — shared by training and the inference reload."""
+    import torch
+
+    if arch == "linear":
+        return torch.nn.Linear(in_dim, k)
+    if arch == "mlp":
+        return torch.nn.Sequential(
+            torch.nn.Linear(in_dim, hidden),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(0.3),
+            torch.nn.Linear(hidden, k),
+        )
+    raise ValueError(f"arch must be 'linear' or 'mlp', got {arch!r}")
+
+
 def train_head(
     emb_uri: str,
     split_uri: str,
@@ -62,8 +78,13 @@ def train_head(
     lr: float = 0.05,
     patience: int = 60,
     seed: int = 42,
+    save: str | None = None,
 ):
-    """Train a frozen-embedding head → ``(per_class_df, test_macro_f1)``."""
+    """Train a frozen-embedding head → ``(per_class_df, test_macro_f1)``.
+
+    ``save`` writes a checkpoint (weights + standardization mu/sd + class ids) for
+    wall-to-wall inference — reload with ``load_head``.
+    """
     import torch
 
     ds = xr.open_zarr(emb_uri)
@@ -97,17 +118,7 @@ def train_head(
     xtr_t, xva_t, xte_t = t(xtr), t(xva), t(xte)
     ytr_t = torch.tensor(ytr, dtype=torch.long)
 
-    if arch == "linear":
-        model = torch.nn.Linear(emb.shape[1], k)
-    elif arch == "mlp":
-        model = torch.nn.Sequential(
-            torch.nn.Linear(emb.shape[1], hidden),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.3),
-            torch.nn.Linear(hidden, k),
-        )
-    else:
-        raise ValueError(f"arch must be 'linear' or 'mlp', got {arch!r}")
+    model = _build_model(arch, int(emb.shape[1]), k, hidden)
 
     w = _class_weights(np.bincount(ytr, minlength=k).astype("float32"), weight)
     loss_fn = torch.nn.CrossEntropyLoss(weight=torch.tensor(w, dtype=torch.float32))
@@ -137,4 +148,41 @@ def train_head(
     logger.success(
         "{} head ({} CE): val macro-F1 {:.3f} | test macro-F1 {:.3f}", arch, weight, best_f1, macro
     )
+    if save:
+        from cmrv.io import ensure_parent
+
+        ensure_parent(save)
+        torch.save(
+            {
+                "state_dict": best_state,
+                "mu": mu,
+                "sd": sd,
+                "classes": classes,
+                "arch": arch,
+                "in_dim": int(emb.shape[1]),
+                "hidden": hidden,
+            },
+            save,
+        )
+        logger.success("saved head → {}", save)
     return per, macro
+
+
+def load_head(ckpt_path: str):
+    """Load a saved head → ``(model.eval(), mu, sd, class_ids)`` for inference."""
+    import torch
+
+    ck = torch.load(ckpt_path, weights_only=False)
+    model = _build_model(ck["arch"], ck["in_dim"], len(ck["classes"]), ck["hidden"])
+    model.load_state_dict(ck["state_dict"])
+    model.eval()
+    return model, ck["mu"], ck["sd"], np.asarray(ck["classes"])
+
+
+def predict(model, mu, sd, classes: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Standardize features ``(N, D)`` → predicted class_ids ``(N,)``."""
+    import torch
+
+    with torch.no_grad():
+        idx = model(torch.tensor((x - mu) / sd, dtype=torch.float32)).argmax(1).numpy()
+    return classes[idx]

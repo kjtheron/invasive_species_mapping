@@ -38,7 +38,8 @@ class UniverSatEmbedder(Embedder):
         self.model = torch.hub.load(repo, "from_pretrained", trust_repo=True).eval().to(device)
 
     @torch.no_grad()
-    def embed(self, stacks: np.ndarray, dates: np.ndarray) -> np.ndarray:
+    def _grids(self, stacks: np.ndarray, dates: np.ndarray) -> np.ndarray:
+        """Forward → dense token grid per sample: ``(N, G, G, D)``."""
         out = []
         dev_type = "cuda" if self.device.startswith("cuda") else "cpu"
         for i in range(0, len(stacks), self.batch):
@@ -51,14 +52,20 @@ class UniverSatEmbedder(Embedder):
                     output_grid=self.output_grid,
                 )
             feats = feats[0] if isinstance(feats, (tuple, list)) else feats  # (b, L, D)
-            if self.pool == "center":
-                g = int(feats.shape[1] ** 0.5)
-                vec = feats.reshape(feats.shape[0], g, g, feats.shape[2])[:, g // 2, g // 2, :]
-            else:
-                vec = feats.mean(dim=1)
-            # fp16/NaN tripwire — NaN in → NaN out; catch unfilled cloud pixels or
-            # an unscaled DN range rather than silently training on NaN features.
-            if not torch.isfinite(vec).all():
-                raise ValueError("non-finite UniverSat embedding — check chip NaN fill + scale")
-            out.append(vec.cpu().numpy())  # (b, D)
-        return np.concatenate(out, axis=0).astype("float32")
+            g = int(feats.shape[1] ** 0.5)
+            out.append(feats.reshape(feats.shape[0], g, g, feats.shape[2]).cpu().numpy())
+        return np.concatenate(out, axis=0)
+
+    def embed(self, stacks: np.ndarray, dates: np.ndarray) -> np.ndarray:
+        """Pooled vector per sample ``(N, D)`` — center token (point labels) or mean."""
+        grids = self._grids(stacks, dates)  # (N, G, G, D)
+        g = grids.shape[1]
+        vec = grids[:, g // 2, g // 2, :] if self.pool == "center" else grids.mean(axis=(1, 2))
+        # fp16/NaN tripwire — NaN in → NaN out; catch unfilled cloud pixels or unscaled DN.
+        if not np.isfinite(vec).all():
+            raise ValueError("non-finite UniverSat embedding — check chip NaN fill + scale")
+        return vec.astype("float32")
+
+    def embed_dense(self, stacks: np.ndarray, dates: np.ndarray) -> np.ndarray:
+        """Full token grid per sample ``(N, G, G, D)`` — the frozen head runs on every token."""
+        return self._grids(stacks, dates).astype("float32")

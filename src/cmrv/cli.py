@@ -403,18 +403,38 @@ def train_head(
     split: str = "data/chips/train/split.parquet",
     arch: str = "linear",
     weight: str = "balanced",
+    save: str | None = None,
 ) -> None:
     """Train a light head on frozen embeddings + report per-class test metrics.
 
     --arch: ``linear`` (bakeoff baseline) or ``mlp`` (1 hidden layer).
     --weight: ``balanced`` (N/(K·n_c)), ``sqrt`` (gentler), or ``none``. Computed
               live from the train fold, so it tracks label updates automatically.
+    --save: checkpoint path (weights + mu/sd + class ids) for `cmrv infer`.
     """
     from cmrv.embeddings.head import train_head as _train
 
-    per, macro = _train(emb, split, arch=arch, weight=weight)
+    per, macro = _train(emb, split, arch=arch, weight=weight, save=save)
     print(per.to_string(index=False))
     logger.success("{} head ({} CE): test macro-F1 = {:.3f}", arch, weight, macro)
+
+
+def infer(
+    bbox: tuple[float, float, float, float],
+    ckpt: str = "data/runs/head_linear.pt",
+    out: str = "data/outputs/infer_class.tif",
+    year: int = 2023,
+    device: str = "cpu",
+) -> None:
+    """Wall-to-wall per-pixel class map over a lon/lat box → COG.
+
+    bbox = (min_lon, min_lat, max_lon, max_lat). 3-month composite → UniverSat dense
+    tokens → frozen head per token (the center-token rep, applied to every token).
+    Needs the ``embed`` group + a saved head (``train-head --save``).
+    """
+    from cmrv.infer import infer_box
+
+    infer_box(bbox, ckpt, out, year=year, device=device)
 
 
 def main() -> None:
@@ -432,6 +452,7 @@ def main() -> None:
             "make-split": chips_make_split,
             "embed": embed,
             "train-head": train_head,
+            "infer": infer,
         }
     )
 
