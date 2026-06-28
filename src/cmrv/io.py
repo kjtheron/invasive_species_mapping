@@ -48,11 +48,6 @@ def list_parquet_files(root: str, *, recursive: bool = False) -> list[str]:
 # Raster helpers
 
 
-def open_raster(uri: str) -> rasterio.DatasetReader:
-    """Open a local raster for reading."""
-    return rasterio.open(uri)
-
-
 def write_cog(
     arr: np.ndarray,
     transform: rasterio.transform.Affine,
