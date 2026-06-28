@@ -5,9 +5,11 @@ from __future__ import annotations
 import xarray as xr
 
 # SCL values that indicate unusable pixels.
-# 3 = cloud shadow, 8 = cloud medium probability,
-# 9 = cloud high probability, 10 = thin cirrus.
-BAD_SCL: frozenset[int] = frozenset({3, 8, 9, 10})
+# 0 = no-data, 1 = saturated/defective, 3 = cloud shadow, 8 = cloud medium
+# probability, 9 = cloud high probability, 10 = thin cirrus.
+# Left valid: 2 (dark/topographic shadow — common on fynbos slopes, over-masking
+# risk) and 11 (snow/ice — rare in WC chips).
+BAD_SCL: frozenset[int] = frozenset({0, 1, 3, 8, 9, 10})
 
 
 def apply_scl_mask(

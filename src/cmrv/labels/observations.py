@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
@@ -161,10 +162,13 @@ def write_partition(
 def read_all(root: str = PROCESSED_ROOT) -> pd.DataFrame:
     """Read the full partitioned dataset as a pandas DataFrame.
 
-    The ``geometry`` column contains raw WKB bytes; callers that need shapely
-    geometries should apply ``shapely.from_wkb`` (as ``load_training_labels`` does).
+    Only dataset *partition* files (``root/<dataset>/*.parquet``) are read —
+    root-level files like ``summary.parquet`` are excluded, so they don't pollute
+    the observation rows. The ``geometry`` column contains raw WKB bytes; callers
+    that need shapely geometries apply ``shapely.from_wkb`` (as ``load_training_labels``).
     """
-    files = list_parquet_files(root, recursive=True)
+    base = Path(root)
+    files = [f for f in list_parquet_files(root, recursive=True) if Path(f).parent != base]
     if not files:
         raise FileNotFoundError(f"no parquet files under {root}")
     return pd.concat([read_parquet_df(f) for f in files], ignore_index=True)

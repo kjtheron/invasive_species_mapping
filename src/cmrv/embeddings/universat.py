@@ -52,5 +52,9 @@ class UniverSatEmbedder(Embedder):
                 vec = feats.reshape(feats.shape[0], g, g, feats.shape[2])[:, g // 2, g // 2, :]
             else:
                 vec = feats.mean(dim=1)
+            # fp16/NaN tripwire — NaN in → NaN out; catch unfilled cloud pixels or
+            # an unscaled DN range rather than silently training on NaN features.
+            if not torch.isfinite(vec).all():
+                raise ValueError("non-finite UniverSat embedding — check chip NaN fill + scale")
             out.append(vec.cpu().numpy())  # (b, D)
         return np.concatenate(out, axis=0).astype("float32")
