@@ -1,19 +1,17 @@
-"""Embedding stage — encoder-agnostic backend + the linear-probe evaluation.
+"""Embedding stage — encoder-agnostic backend.
 
-Light exports only (numpy/pandas). The UniverSat backend pulls torch and is
-imported explicitly:
+Light exports only (numpy). The UniverSat backend pulls torch and is imported
+explicitly:
 
     from cmrv.embeddings.universat import UniverSatEmbedder   # needs the `embed` group
+
+``embed_chips`` (embed.py) writes the cube; ``train_head`` (head.py) trains on it.
 """
 
 from cmrv.embeddings.base import MONTH_DOY, Embedder, RawStatsEmbedder
-from cmrv.embeddings.probe import evaluate_embedders, linear_probe_scores, load_chip_arrays
 
 __all__ = [
     "MONTH_DOY",
     "Embedder",
     "RawStatsEmbedder",
-    "evaluate_embedders",
-    "linear_probe_scores",
-    "load_chip_arrays",
 ]

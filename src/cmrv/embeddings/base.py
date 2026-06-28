@@ -2,8 +2,8 @@
 
 An ``Embedder`` maps a stack of monthly S2 composites for one chip to a single
 feature vector. Swapping the implementation leaves the rest of the pipeline
-(chips / manifest / make-split / probe) untouched. UniverSat is the adopted
-encoder; ``RawStatsEmbedder`` is the dependency-free baseline.
+(chips / manifest / make-split / embed / head) untouched. UniverSat is the
+adopted encoder; ``RawStatsEmbedder`` is the dependency-free baseline.
 
 Chip-stack convention: float32 ``(N, T, C, H, W)`` — N chips, T months, C bands
 (10), H×W pixels at native 10 m. ``dates`` is ``(N, T)`` day-of-year ints.
