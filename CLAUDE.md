@@ -57,7 +57,7 @@ Phase 0 runs **locally** — no cloud bucket. All artifacts live under `data/`
 ## Consolidated IO helpers (`cmrv.io`)
 
 All shared IO lives in `src/cmrv/io.py` — no module duplicates these:
-`load_config`, `list_parquet_files`, `open_raster`, `write_cog`,
+`load_config`, `list_parquet_files`, `write_cog`,
 `read_parquet_df`/`write_parquet_df`, `read_gdf`/`write_gdf_parquet`. pandas +
 geopandas/pyogrio do all Parquet I/O (no DuckDB). `read_gdf` decodes the WKB +
 `__crs__` GeoParquet this module writes, falling back to native GeoParquet.
