@@ -71,6 +71,8 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
                     "month_label": mo,
                     "chip_uri": str(p),
                     "block_id": 7,
+                    "x_utm": 5.0,
+                    "y_utm": 6.0,
                     "valid_frac": 1.0,
                 }
             )
@@ -89,3 +91,5 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
     assert ds["emb"].shape == (2, 768)
     assert set(ds["obs_id"].values) == {"a", "b"}
     assert set(ds["block_id"].values) == {7}
+    assert ds.attrs["crs"] == "EPSG:32734"
+    assert set(ds["x_utm"].values) == {5.0}
