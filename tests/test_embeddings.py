@@ -44,3 +44,48 @@ def test_evaluate_embedders_table() -> None:
     df = evaluate_embedders(stacks, dates, y, groups, [RawStatsEmbedder()])
     assert list(df.columns) == ["embedder", "dim", "macro_f1", "f1_std"]
     assert df.iloc[0]["embedder"] == "rawstats"
+
+
+def test_embed_chips_writes_keyed_zarr(tmp_path):
+    """embed_chips streams the manifest → a Zarr keyed by obs_id + block_id."""
+    import pandas as pd
+    import rasterio
+    import xarray as xr
+
+    from cmrv.embeddings.base import Embedder
+    from cmrv.embeddings.embed import embed_chips
+
+    months = ("feb", "may", "sep")
+    rows = []
+    for oid in ("a", "b"):
+        for mo in months:
+            p = tmp_path / oid / f"{mo}.tif"
+            p.parent.mkdir(exist_ok=True)
+            with rasterio.open(
+                p, "w", driver="GTiff", height=4, width=4, count=10, dtype="float32"
+            ) as d:
+                d.write(np.full((10, 4, 4), 5000.0, dtype="float32"))
+            rows.append(
+                {
+                    "obs_id": oid,
+                    "month_label": mo,
+                    "chip_uri": str(p),
+                    "block_id": 7,
+                    "valid_frac": 1.0,
+                }
+            )
+    pd.DataFrame(rows).to_parquet(tmp_path / "manifest.parquet")
+
+    class _Stub(Embedder):
+        name = "stub"
+
+        def embed(self, stacks, dates):
+            return np.zeros((len(stacks), 768), dtype="float32")
+
+    out = embed_chips(
+        str(tmp_path / "manifest.parquet"), str(tmp_path / "emb.zarr"), _Stub(), batch=1
+    )
+    ds = xr.open_zarr(out)
+    assert ds["emb"].shape == (2, 768)
+    assert set(ds["obs_id"].values) == {"a", "b"}
+    assert set(ds["block_id"].values) == {7}

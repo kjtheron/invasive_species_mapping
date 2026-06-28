@@ -366,6 +366,28 @@ def chips_stats(
     chip_stats(manifest_uri=manifest, top_species=top_species, top_blocks=top_blocks)
 
 
+def embed(
+    manifest: str = "data/chips/train/manifest.parquet",
+    out: str = "data/embeddings/universat_center.zarr",
+    output_grid: int = 64,
+    device: str = "cpu",
+    batch: int = 8,
+) -> None:
+    """Embed training chips → UniverSat center-token vectors (single Zarr).
+
+    One 768-d vector per obs at the chip's native 10 m resolution (``output_grid 64``
+    = per-pixel tokens over the 64 px chip, matching wall-to-wall inference). Center
+    pooling = the per-location representation the frozen head replicates densely at
+    inference. CRS-less + tiny (~7.5 MB), so it's a single Zarr regardless of source
+    UTM zone. Needs the ``embed`` dependency group.
+    """
+    from cmrv.embeddings.embed import embed_chips
+    from cmrv.embeddings.universat import UniverSatEmbedder
+
+    enc = UniverSatEmbedder(pool="center", output_grid=output_grid, device=device, batch=batch)
+    embed_chips(manifest, out, enc, batch=batch)
+
+
 def main() -> None:
     tyro.extras.subcommand_cli_from_dict(
         {
@@ -379,6 +401,7 @@ def main() -> None:
             "ingest-month": ingest_month,
             "ingest-chips": ingest_chips,
             "make-split": chips_make_split,
+            "embed": embed,
         }
     )
 
