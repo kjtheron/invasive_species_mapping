@@ -371,7 +371,7 @@ def embed(
     out: str = "data/embeddings/universat_center.zarr",
     output_grid: int = 64,
     device: str = "cpu",
-    batch: int = 32,
+    batch: int = 8,
     num_workers: int = 4,
     amp: bool = False,
 ) -> None:
@@ -385,7 +385,9 @@ def embed(
 
     --device: ``cpu`` or ``cuda`` (cloud). --num-workers: chip-prefetch workers that
     overlap disk reads with the forward (raise on GPU to keep it fed). --amp: fp16/bf16
-    autocast (big GPU win; leave off on CPU).
+    autocast (big GPU win; leave off on CPU). ponytail: --batch default 8 — at
+    output_grid 64 the ViT's O(L²) attention over 4096 tokens makes activations scale
+    hard with batch (32 OOMs a 16 GB box); raise it on a bigger-VRAM GPU.
     """
     from cmrv.embeddings.embed import embed_chips
     from cmrv.embeddings.universat import UniverSatEmbedder
