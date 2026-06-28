@@ -105,8 +105,15 @@ def test_train_head_separates_synthetic(tmp_path):
     folds = np.array((["train", "train", "val", "test"] * n)[:n])
     pd.DataFrame({"obs_id": obs, "fold": folds, "class_id": y}).to_parquet(tmp_path / "s.parquet")
 
+    ckpt = str(tmp_path / "head.pt")
     per, macro = train_head(
-        str(tmp_path / "e.zarr"), str(tmp_path / "s.parquet"), arch="linear", epochs=200
+        str(tmp_path / "e.zarr"), str(tmp_path / "s.parquet"), arch="linear", epochs=200, save=ckpt
     )
     assert macro > 0.8
     assert set(per["class_id"]) == {0, 1}
+
+    # save → load → predict round-trip (the inference path) recovers the labels
+    from cmrv.embeddings.head import load_head, predict
+
+    model, mu, sd, classes = load_head(ckpt)
+    assert (predict(model, mu, sd, classes, X) == y).mean() > 0.8
