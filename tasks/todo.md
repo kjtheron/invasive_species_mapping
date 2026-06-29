@@ -57,5 +57,9 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 - [ ] **Cover gate** — flip `load_training_labels(min_cover_pct≈60)` on once enough cover-bearing data exists
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)
-- [ ] **Per-pixel uncertainty + Mahalanobis OOD** — part of the inference stage above
+- [ ] **MapWAPS native/land-cover classes** — `labels-mapwaps-ingest` currently runs
+  `iap_only` (keeps only the 4 alien genera). MapWAPS Olifants-Doring carries ~23 LULC
+  classes incl. native + land-cover; remap those to `western_cape_landcover` (a
+  MapWAPS-LULC → our-class crosswalk, like the SANLC adapter) and drop `iap_only` to
+  gain free extra training data.
 - [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)
