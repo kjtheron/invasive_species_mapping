@@ -404,18 +404,19 @@ def infer(
     out: str = "data/outputs/infer_class.tif",
     year: int = 2023,
     device: str = "cpu",
-    tta: bool = False,
+    tta_views: int = 1,
 ) -> None:
     """Wall-to-wall per-pixel class map over a lon/lat box → COG.
 
     bbox = (min_lon, min_lat, max_lon, max_lat). 3-month composite → UniverSat dense
     tokens → frozen head per token (the center-token rep, applied to every token),
     overlap-blended into a seamless class/confidence/OOD COG. Needs the ``embed`` group
-    + a saved head (``train-head --save``). --tta averages 8 flip/rotation views (8× slower).
+    + a saved head (``train-head --save``). --tta-views soft-averages augmented views
+    (1 = off, 4 = rotations, 8 = full D4 flips+rotations); ~N× slower.
     """
     from cmrv.infer import infer_box
 
-    infer_box(bbox, ckpt, out, year=year, device=device, tta=tta)
+    infer_box(bbox, ckpt, out, year=year, device=device, tta_views=tta_views)
 
 
 def main() -> None:
