@@ -62,16 +62,15 @@ def _starts(n: int, win: int, stride: int) -> list[int]:
     return s
 
 
-def _d4_ops(tta: bool):
-    """Dihedral (flip × 90° rotation) augmentations as ``(fwd, inv)`` pairs.
+def _d4_ops(n_views: int):
+    """The first ``n_views`` dihedral augmentations as ``(fwd, inv)`` pairs.
 
-    ``fwd`` transforms an input's spatial last-2 axes; ``inv`` applies the inverse to a
-    prediction's spatial first-2 axes, bringing probs back to the original frame. Land
-    cover is flip/rotation-invariant, so averaging the 8 views de-noises the prediction.
-    ``tta=False`` → identity only.
+    Ordered so **1 = identity** (no TTA), **4 = the four 90° rotations**, **8 = the full
+    D4 group** (rotations × flips). ``fwd`` transforms an input's spatial last-2 axes;
+    ``inv`` applies the inverse to a prediction's first-2 axes, bringing probs back to the
+    original frame. Land cover is flip/rotation-invariant, so averaging the views
+    (soft-voting) de-noises the prediction.
     """
-    if not tta:
-        return [(lambda x: x, lambda p: p)]
     ops = []
     for flip in (False, True):
         for k in range(4):
@@ -84,7 +83,7 @@ def _d4_ops(tta: bool):
                 return np.flip(p, axis=1) if flip else p
 
             ops.append((fwd, inv))
-    return ops
+    return ops[: max(1, min(n_views, 8))]
 
 
 def infer_box(
@@ -95,14 +94,15 @@ def infer_box(
     year: int = 2023,
     pipeline: str = "configs/pipeline.yaml",
     device: str = "cpu",
-    tta: bool = False,
+    tta_views: int = 1,
 ):
     """``(minlon, minlat, maxlon, maxlat)`` → writes a COG, returns ``(bands, transform, epsg)``.
 
     Bands are class_id / confidence / OOD. Always saves the COG to ``out_uri`` (set the
     path to control where) and also returns the arrays + georef so a caller can mosaic
     tiles. Overlapping 64 px windows with a Hann edge-taper blend away the 640 m window
-    seams; ``tta`` averages 8 dihedral (flip/rotation) views per window — robust, 8× slower.
+    seams. ``tta_views`` soft-averages augmented views per window (1 = off, 4 = rotations,
+    8 = full D4) — more robust, ~N× slower.
     """
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
@@ -123,7 +123,7 @@ def infer_box(
         np.pad(stack, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="reflect") / 10000.0, nan=0.0
     )
     taper = np.outer(np.hanning(CHIP_PX), np.hanning(CHIP_PX)).astype("float32")  # ~0 at edges
-    ops = _d4_ops(tta)
+    ops = _d4_ops(tta_views)
     prob_acc = np.zeros((h, w, k), "float32")
     ood_acc = np.zeros((h, w), "float32")
     wsum = np.zeros((h, w), "float32")

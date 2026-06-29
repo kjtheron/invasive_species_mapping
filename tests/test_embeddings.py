@@ -128,8 +128,8 @@ def test_d4_ops_roundtrip():
     from cmrv.infer import _d4_ops
 
     a = np.random.default_rng(0).random((6, 6)).astype("float32")
-    for fwd, inv in _d4_ops(tta=True):
+    for fwd, inv in _d4_ops(8):
         aug = fwd(a[None, None, None])[0, 0, 0]  # transform as input-spatial (last-2 axes)
         back = inv(aug[..., None])[..., 0]  # inverse as probs-spatial (first-2 axes)
         assert np.allclose(back, a)
-    assert len(_d4_ops(tta=True)) == 8 and len(_d4_ops(tta=False)) == 1
+    assert [len(_d4_ops(n)) for n in (1, 4, 8)] == [1, 4, 8]  # 1=identity, 4=rotations, 8=full D4
