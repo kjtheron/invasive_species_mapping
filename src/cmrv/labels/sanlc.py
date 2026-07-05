@@ -191,7 +191,6 @@ def ingest_sanlc(
                 "species": cls,
                 "species_normalized": cls,
                 "taxon_rank": "biome" if natural else "landcover",
-                "gbif_usage_key": None,
                 "geom_type": "point",
                 "coord_uncertainty_m": COORD_UNCERTAINTY_M,
                 "event_date": f"{yr}-01-01",

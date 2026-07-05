@@ -114,7 +114,6 @@ def _build_rows(
                 "species": lulc,
                 "species_normalized": sp_norm,
                 "taxon_rank": rank,
-                "gbif_usage_key": None,
                 "geom_type": "point",
                 "coord_uncertainty_m": COORD_UNCERTAINTY_M,
                 "event_date": _clean_date(rec.get("DateTime")) or fallback_date,

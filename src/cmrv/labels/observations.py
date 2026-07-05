@@ -41,7 +41,6 @@ COLUMNS: tuple[str, ...] = (
     "species",
     "species_normalized",
     "taxon_rank",
-    "gbif_usage_key",
     "geom_type",
     "coord_uncertainty_m",
     "event_date",

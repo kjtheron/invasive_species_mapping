@@ -27,7 +27,6 @@ def _make_gdf(rows: list[dict]) -> gpd.GeoDataFrame:
         "source_url": None,
         "species": None,
         "species_normalized": None,
-        "gbif_usage_key": None,
         "geom_type": "point",
         "coord_uncertainty_m": None,
         "event_date": None,

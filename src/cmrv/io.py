@@ -20,9 +20,6 @@ from rasterio.crs import CRS
 from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 
-PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
-DATA_DIR: Path = PROJECT_ROOT / "data"
-
 
 def ensure_parent(uri: str) -> None:
     """Create parent directories for a local path."""
