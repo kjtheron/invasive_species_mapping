@@ -6,9 +6,9 @@
 
 ``load_training_labels``
     Spatial + species filter over the merged store — the single entry-point
-    for training configs. Returns a geopandas GeoDataFrame in EPSG:4326 with
-    WKB geometry deserialized to shapely geometries, clipped to ``aoi_uri``
-    and filtered to ``species_subset`` (by GBIF usage_key or scientific name).
+    for training configs. Returns a geopandas GeoDataFrame in EPSG:4326 (native
+    geometry), clipped to ``aoi_uri`` and filtered to ``species_subset`` (by
+    GBIF usage_key or scientific name).
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from __future__ import annotations
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
-from shapely import from_wkb
 
 from cmrv.io import read_gdf
 from cmrv.labels.observations import PROCESSED_ROOT, read_all, write_summary
@@ -58,6 +57,7 @@ def load_training_labels(
     geom_types: list[str] | None = None,
     min_weight: float | None = None,
     min_cover_pct: float | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
     root: str = PROCESSED_ROOT,
 ) -> gpd.GeoDataFrame:
     """Load training labels filtered to an AOI and optional species subset.
@@ -71,13 +71,11 @@ def load_training_labels(
     ``cover_pct`` ≥ threshold (drops null-cover rows). Off by default; enable
     (~60) once cover-bearing data is in the store.
 
-    Returns a GeoDataFrame with WKB geometry deserialized to shapely, EPSG:4326.
+    Returns a GeoDataFrame with native geometry, EPSG:4326.
     """
-    df = _dedup_latest(read_all(root))
+    df = _dedup_latest(read_all(root, sources=sources, bbox=bbox))  # sources/bbox pushed down
     mask = pd.Series(True, index=df.index)
 
-    if sources:
-        mask &= df["source"].isin(sources)
     if geom_types:
         mask &= df["geom_type"].isin(geom_types)
     if min_weight is not None:
@@ -110,12 +108,9 @@ def load_training_labels(
     df = df[mask]
     logger.info("load_training_labels: {} rows after filters", len(df))
 
-    geometries = from_wkb(df["geometry"].to_numpy())  # vectorized; None → None
-    gdf = gpd.GeoDataFrame(df.drop(columns=["geometry"]), geometry=geometries, crs="EPSG:4326")
-
     aoi = read_gdf(aoi_uri).to_crs("EPSG:4326")
     aoi_union = aoi.union_all() if hasattr(aoi, "union_all") else aoi.unary_union
-    gdf = gdf[gdf.geometry.intersects(aoi_union)].copy()
+    gdf = df[df.geometry.intersects(aoi_union)].copy()
     logger.info("after AOI clip: {} rows", len(gdf))
 
     return gdf

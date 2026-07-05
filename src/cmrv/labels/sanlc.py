@@ -24,7 +24,6 @@ import geopandas as gpd
 import pandas as pd
 import pyogrio
 from loguru import logger
-from shapely import from_wkb
 
 from cmrv.io import read_gdf
 from cmrv.labels.observations import PROCESSED_ROOT, make_run_id, read_all, write_partition
@@ -171,11 +170,8 @@ def ingest_sanlc(
     logger.info("after VegMap biome join: {}", len(pts))
 
     # exclude points whose 640 m chip would contain a known IAP field point
-    store = read_all(root)
-    store = store[store["source"] != SOURCE]
-    iap = gpd.GeoSeries(
-        from_wkb(store["geometry"].dropna().to_numpy()), crs="EPSG:4326"
-    ).to_crs(UTM34S)
+    store = read_all(root)  # native GeoParquet → geometry already shapely
+    iap = store.loc[store["source"] != SOURCE, "geometry"].to_crs(UTM34S)
     iap_buf = iap.buffer(iap_buffer_m).union_all()
     pts = pts[~pts.to_crs(UTM34S).geometry.within(iap_buf).to_numpy()].reset_index(drop=True)
     logger.info("after IAP exclusion ({} m): {}", iap_buffer_m, len(pts))
