@@ -24,6 +24,20 @@ from cmrv.labels.observations import PROCESSED_ROOT
 from cmrv.labels.sanlc import ingest_sanlc
 
 
+def parse_bbox(s: str) -> tuple[float, float, float, float]:
+    """Parse ``"min_lon,min_lat,max_lon,max_lat"`` → 4-float tuple, validated min<max."""
+    try:
+        vals = tuple(float(x) for x in s.split(","))
+    except ValueError as e:
+        raise ValueError(f"bbox must be comma-separated numbers, got {s!r}") from e
+    if len(vals) != 4:
+        raise ValueError(f"bbox needs 4 values (min_lon,min_lat,max_lon,max_lat), got {len(vals)}")
+    min_lon, min_lat, max_lon, max_lat = vals
+    if not (min_lon < max_lon and min_lat < max_lat):
+        raise ValueError(f"bbox needs min_lon<max_lon and min_lat<max_lat, got {vals}")
+    return vals
+
+
 def aoi_wc(
     out: str = "data/aoi/processed/western_cape.parquet",
     source: str | None = None,
@@ -398,7 +412,7 @@ def train_head(
 
 
 def infer(
-    bbox: tuple[float, float, float, float],
+    bbox: str,
     ckpt: str = "data/runs/head_linear.pt",
     out: str = "data/outputs/infer_class.tif",
     year: int = 2023,
@@ -407,15 +421,17 @@ def infer(
 ) -> None:
     """Wall-to-wall per-pixel class map over a lon/lat box → COG.
 
-    bbox = (min_lon, min_lat, max_lon, max_lat). 3-month composite → UniverSat dense
-    tokens → frozen head per token (the center-token rep, applied to every token),
+    bbox = "min_lon,min_lat,max_lon,max_lat" — a single comma-separated string so
+    negative latitudes aren't mistaken for CLI flags (e.g.
+    ``--bbox=19.21,-33.20,19.25,-33.16``). 3-month composite → UniverSat dense tokens
+    → frozen head per token (the center-token rep, applied to every token),
     overlap-blended into a seamless class/confidence/OOD COG. Needs the ``embed`` group
     + a saved head (``train-head --save``). --tta-views soft-averages augmented views
     (1 = off, 4 = rotations, 8 = full D4 flips+rotations); ~N× slower.
     """
     from cmrv.infer import infer_box
 
-    infer_box(bbox, ckpt, out, year=year, device=device, tta_views=tta_views)
+    infer_box(parse_bbox(bbox), ckpt, out, year=year, device=device, tta_views=tta_views)
 
 
 def main() -> None:
