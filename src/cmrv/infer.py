@@ -5,10 +5,11 @@ window) → frozen head per token → per-pixel ``class_id`` + confidence + Maha
 OOD score → 3-band georeferenced COG. Same encoder and per-token representation as
 training (the center token the head learned), applied to *every* token.
 
-Windows overlap 50% and are blended with a Hann edge-taper, so edge tokens (truncated
-context) don't leave 640 m seams. CRS is **not** hardcoded: it's taken from the
-Sentinel-2 data's native MGRS UTM zone (``proj:epsg``), so each box comes out in its
-own correct projection — mosaic to a common CRS downstream.
+Windows overlap 25% and blend with a raised-cosine (constant-overlap-add) taper, so
+edge tokens (truncated context) don't leave 640 m seams. Each window's TTA views run in
+one batched forward. CRS is **not** hardcoded: it's taken from the Sentinel-2 data's
+native MGRS UTM zone (``proj:epsg``), so each box comes out in its own correct
+projection — mosaic to a common CRS downstream.
 """
 
 from __future__ import annotations
@@ -86,6 +87,19 @@ def _d4_ops(n_views: int):
     return ops[: max(1, min(n_views, 8))]
 
 
+def _taper(n: int, ramp: int) -> np.ndarray:
+    """2-D raised-cosine blend window: flat 1.0 centre, cosine ramp over ``ramp`` px/edge.
+
+    With ``ramp = overlap`` the adjacent windows' ramps sum to 1 (constant-overlap-add),
+    so overlapping predictions blend seamlessly at any stride.
+    """
+    w = np.ones(n, dtype="float32")
+    if ramp > 0:
+        r = 0.5 * (1 - np.cos(np.pi * (np.arange(ramp) + 0.5) / ramp))
+        w[:ramp], w[-ramp:] = r, r[::-1]
+    return np.outer(w, w).astype("float32")
+
+
 def infer_box(
     bbox: tuple[float, float, float, float],
     ckpt_path: str,
@@ -100,9 +114,9 @@ def infer_box(
 
     Bands are class_id / confidence / OOD. Always saves the COG to ``out_uri`` (set the
     path to control where) and also returns the arrays + georef so a caller can mosaic
-    tiles. Overlapping 64 px windows with a Hann edge-taper blend away the 640 m window
-    seams. ``tta_views`` soft-averages augmented views per window (1 = off, 4 = rotations,
-    8 = full D4) — more robust, ~N× slower.
+    tiles. Overlapping 64 px windows (25%) blend with a constant-overlap-add taper to
+    remove the 640 m window seams. ``tta_views`` soft-averages augmented views per window
+    (1 = off, 4 = rotations, 8 = full D4), all in one batched forward — robust, ~N× slower.
     """
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
@@ -117,13 +131,15 @@ def infer_box(
     dvec = np.array([[MONTH_DOY[m["label"]] for m in months]])
     k = len(classes)
 
-    # reflect-pad so every output pixel can sit at a window centre; 50% overlap.
-    pad = stride = CHIP_PX // 2
+    # reflect-pad so every output pixel can sit at a window centre; 25% overlap.
+    pad = CHIP_PX // 2
+    stride = CHIP_PX * 3 // 4
     padded = np.nan_to_num(
         np.pad(stack, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="reflect") / 10000.0, nan=0.0
     )
-    taper = np.outer(np.hanning(CHIP_PX), np.hanning(CHIP_PX)).astype("float32")  # ~0 at edges
+    taper = _taper(CHIP_PX, CHIP_PX - stride)  # ramp = overlap → constant-overlap-add blend
     ops = _d4_ops(tta_views)
+    dates = np.repeat(dvec, len(ops), axis=0)  # (n_views, T)
     prob_acc = np.zeros((h, w, k), "float32")
     ood_acc = np.zeros((h, w), "float32")
     wsum = np.zeros((h, w), "float32")
@@ -131,15 +147,16 @@ def infer_box(
     for r0 in _starts(h + 2 * pad, CHIP_PX, stride):
         for c0 in _starts(w + 2 * pad, CHIP_PX, stride):
             win = padded[None, :, :, r0 : r0 + CHIP_PX, c0 : c0 + CHIP_PX]
-            probs = np.zeros((CHIP_PX, CHIP_PX, k), "float32")
-            oods = np.zeros((CHIP_PX, CHIP_PX), "float32")
-            for fwd, inv in ops:  # test-time augmentation: average dihedral views
-                grid = enc.embed_dense(np.ascontiguousarray(fwd(win)), dvec)[0]
-                pr, od = predict_probs(model, mu, sd, ood, grid.reshape(-1, grid.shape[-1]))
-                probs += inv(pr.reshape(CHIP_PX, CHIP_PX, k))
-                oods += inv(od.reshape(CHIP_PX, CHIP_PX, 1))[..., 0]
-            probs /= len(ops)
-            oods /= len(ops)
+            # all TTA views for this window in ONE batched forward (was 1 view/call)
+            aug = np.concatenate([np.ascontiguousarray(fwd(win)) for fwd, _ in ops])
+            grids = enc.embed_dense(aug, dates)  # (n_views, 64, 64, D)
+            pr, od = predict_probs(model, mu, sd, ood, grids.reshape(-1, grids.shape[-1]))
+            pr = pr.reshape(len(ops), CHIP_PX, CHIP_PX, k)
+            od = od.reshape(len(ops), CHIP_PX, CHIP_PX)
+            probs = np.mean([inv(pr[i]) for i, (_, inv) in enumerate(ops)], axis=0)
+            oods = np.mean(
+                [inv(od[i][..., None])[..., 0] for i, (_, inv) in enumerate(ops)], axis=0
+            )
             ar0, ac0 = r0 - pad, c0 - pad  # window footprint in (unpadded) output coords
             rr0, rr1 = max(ar0, 0), min(ar0 + CHIP_PX, h)
             cc0, cc1 = max(ac0, 0), min(ac0 + CHIP_PX, w)

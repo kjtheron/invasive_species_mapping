@@ -110,7 +110,7 @@ def load_training_labels(
     df = df[mask]
     logger.info("load_training_labels: {} rows after filters", len(df))
 
-    geometries = [from_wkb(bytes(b)) if b is not None else None for b in df["geometry"].tolist()]
+    geometries = from_wkb(df["geometry"].to_numpy())  # vectorized; None → None
     gdf = gpd.GeoDataFrame(df.drop(columns=["geometry"]), geometry=geometries, crs="EPSG:4326")
 
     aoi = read_gdf(aoi_uri).to_crs("EPSG:4326")
