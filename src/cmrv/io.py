@@ -19,7 +19,6 @@ import yaml
 from rasterio.crs import CRS
 from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
-from shapely import from_wkb
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 DATA_DIR: Path = PROJECT_ROOT / "data"
@@ -118,37 +117,16 @@ def write_parquet_df(df: pd.DataFrame, uri: str) -> None:
 
 
 # GeoParquet helpers
-#
-# ponytail: geometry is stored as WKB bytes + a ``__crs__`` column rather than
-# native GeoParquet metadata, for back-compat with artifacts already written in
-# this format. ``read_gdf`` falls back to ``gpd.read_parquet`` for native files.
-# Switch writes to ``gdf.to_parquet`` once the old artifacts are regenerated.
 
 
 def write_gdf_parquet(gdf: gpd.GeoDataFrame, uri: str) -> None:
-    """Write a GeoDataFrame to Parquet (geometry as WKB + __crs__ column)."""
-    geom_col = gdf.geometry.name
-    pdf = gdf.drop(columns=[geom_col]).copy()
-    pdf["geometry"] = gdf.geometry.to_wkb()
-    pdf["__crs__"] = gdf.crs.to_wkt() if gdf.crs else None
+    """Write a GeoDataFrame to native GeoParquet (ZSTD, covering-bbox for read pushdown)."""
     ensure_parent(uri)
-    pdf.to_parquet(uri, index=False, compression="zstd")
+    gdf.to_parquet(uri, index=False, compression="zstd", write_covering_bbox=True)
 
 
 def read_gdf(uri: str) -> gpd.GeoDataFrame:
-    """Read a geo file into a GeoDataFrame.
-
-    Parquet written by :func:`write_gdf_parquet` (geometry WKB + ``__crs__``)
-    is decoded directly; native GeoParquet falls back to ``gpd.read_parquet``.
-    Non-parquet (shp, geojson) uses ``gpd.read_file``.
-    """
+    """Read a geo file into a GeoDataFrame — native GeoParquet, or any GDAL vector."""
     if uri.endswith(".parquet"):
-        pdf = pd.read_parquet(uri)
-        if "__crs__" not in pdf.columns:
-            return gpd.read_parquet(uri)
-        crs_val = pdf["__crs__"].iloc[0] if len(pdf) > 0 else None
-        if hasattr(crs_val, "item"):
-            crs_val = crs_val.item()
-        pdf = pdf.drop(columns=["__crs__"])
-        return gpd.GeoDataFrame(pdf, geometry=from_wkb(pdf["geometry"].to_numpy()), crs=crs_val)
+        return gpd.read_parquet(uri)
     return gpd.read_file(uri)
