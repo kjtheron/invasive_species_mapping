@@ -150,5 +150,5 @@ def read_gdf(uri: str) -> gpd.GeoDataFrame:
         if hasattr(crs_val, "item"):
             crs_val = crs_val.item()
         pdf = pdf.drop(columns=["__crs__"])
-        return gpd.GeoDataFrame(pdf, geometry=from_wkb(pdf["geometry"].apply(bytes)), crs=crs_val)
+        return gpd.GeoDataFrame(pdf, geometry=from_wkb(pdf["geometry"].to_numpy()), crs=crs_val)
     return gpd.read_file(uri)

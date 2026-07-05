@@ -174,7 +174,7 @@ def ingest_sanlc(
     store = read_all(root)
     store = store[store["source"] != SOURCE]
     iap = gpd.GeoSeries(
-        [from_wkb(bytes(b)) for b in store["geometry"] if b is not None], crs="EPSG:4326"
+        from_wkb(store["geometry"].dropna().to_numpy()), crs="EPSG:4326"
     ).to_crs(UTM34S)
     iap_buf = iap.buffer(iap_buffer_m).union_all()
     pts = pts[~pts.to_crs(UTM34S).geometry.within(iap_buf).to_numpy()].reset_index(drop=True)
