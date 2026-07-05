@@ -431,7 +431,11 @@ def infer(
     """
     from cmrv.infer import infer_box
 
-    infer_box(parse_bbox(bbox), ckpt, out, year=year, device=device, tta_views=tta_views)
+    try:
+        box = parse_bbox(bbox)
+    except ValueError as e:
+        raise SystemExit(f"infer: {e}") from None  # clean one-line error, no traceback
+    infer_box(box, ckpt, out, year=year, device=device, tta_views=tta_views)
 
 
 def main() -> None:
