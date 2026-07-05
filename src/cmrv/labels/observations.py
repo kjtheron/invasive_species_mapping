@@ -21,9 +21,8 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
-from shapely import to_wkb
 
-from cmrv.io import list_parquet_files, read_parquet_df, write_parquet_df
+from cmrv.io import ensure_parent, list_parquet_files, write_parquet_df
 
 PROCESSED_ROOT = "data/labels/processed"
 # One partition directory per source dataset (mirrors data/labels/raw/<dataset>/).
@@ -81,11 +80,12 @@ def partition_uri(dataset: str, root: str = PROCESSED_ROOT) -> str:
     return f"{root}/{dataset}"
 
 
-def gdf_to_obs_df(gdf: gpd.GeoDataFrame) -> pd.DataFrame:
-    """Serialize a GeoDataFrame to a flat pandas DataFrame for the observation store.
+def to_obs_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Validate + canonicalise a GeoDataFrame for the observation store.
 
-    Geometry is serialised to WKB bytes (EPSG:4326). Missing nullable columns are
-    filled with None; missing required columns raise ValueError.
+    Reprojects to EPSG:4326, fills missing nullable columns with None, orders columns,
+    and keeps geometry **native** (no WKB) so the store is native GeoParquet — queryable
+    by ``bbox`` at read time. Missing required columns raise ValueError.
     """
     if gdf.crs is None:
         raise ValueError("GeoDataFrame must declare a CRS (expect EPSG:4326)")
@@ -96,14 +96,13 @@ def gdf_to_obs_df(gdf: gpd.GeoDataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"missing required columns: {missing}")
 
-    df = gdf.drop(columns=[gdf.geometry.name]).copy()
-    df["geometry"] = gdf.geometry.apply(lambda g: bytes(to_wkb(g, hex=False)))
-
+    gdf = gdf.copy()
+    if gdf.geometry.name != "geometry":
+        gdf = gdf.rename_geometry("geometry")
     for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-
-    return df[list(COLUMNS)]
+        if col != "geometry" and col not in gdf.columns:
+            gdf[col] = None
+    return gdf[[c for c in COLUMNS if c != "geometry"] + ["geometry"]]
 
 
 def write_partition(
@@ -128,24 +127,29 @@ def write_partition(
     partition_dir = partition_uri(dataset, root=root)
     run_id = run_id or make_run_id(dataset)
 
-    df = gdf_to_obs_df(gdf)
+    new = to_obs_gdf(gdf)
     existing_files = list_parquet_files(partition_dir)
-    frames = [read_parquet_df(f) for f in existing_files]
+    frames = [gpd.read_parquet(f) for f in existing_files]
     n_existing = sum(len(f) for f in frames)
 
-    combined = pd.concat([*frames, df], ignore_index=True)
-    merged = combined.sort_values("ingested_at").drop_duplicates("obs_id", keep="last")
+    combined = pd.concat([*frames, new], ignore_index=True)
+    merged = gpd.GeoDataFrame(
+        combined.sort_values("ingested_at").drop_duplicates("obs_id", keep="last"),
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
 
     tmp_file = f"{partition_dir}/_tmp_{run_id}/part-{run_id}.parquet"
     final_file = f"{partition_dir}/part-{run_id}.parquet"
-    write_parquet_df(merged, tmp_file)
+    ensure_parent(tmp_file)
+    merged.to_parquet(tmp_file, write_covering_bbox=True)  # native GeoParquet + bbox pushdown
 
     logger.info(
         "dataset={} new={} existing={} merged={} (dedupe kept {})",
         dataset,
-        len(df),
+        len(new),
         n_existing,
-        n_existing + len(df),
+        n_existing + len(new),
         len(merged),
     )
 
@@ -159,19 +163,30 @@ def write_partition(
     return final_file
 
 
-def read_all(root: str = PROCESSED_ROOT) -> pd.DataFrame:
-    """Read the full partitioned dataset as a pandas DataFrame.
+def read_all(
+    root: str = PROCESSED_ROOT,
+    sources: list[str] | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> gpd.GeoDataFrame:
+    """Read the store as a GeoDataFrame (native geometry, EPSG:4326).
 
-    Only dataset *partition* files (``root/<dataset>/*.parquet``) are read —
-    root-level files like ``summary.parquet`` are excluded, so they don't pollute
-    the observation rows. The ``geometry`` column contains raw WKB bytes; callers
-    that need shapely geometries apply ``shapely.from_wkb`` (as ``load_training_labels``).
+    ``sources`` filters the ``source`` column via pyarrow row-group pushdown; ``bbox``
+    (minx, miny, maxx, maxy in lon/lat) prunes to intersecting geometries using the
+    GeoParquet covering-bbox. Root-level files (e.g. summary.parquet) are excluded.
     """
     base = Path(root)
     files = [f for f in list_parquet_files(root, recursive=True) if Path(f).parent != base]
     if not files:
         raise FileNotFoundError(f"no parquet files under {root}")
-    return pd.concat([read_parquet_df(f) for f in files], ignore_index=True)
+    kw: dict = {}
+    if sources:  # pyarrow row-group pushdown on the source column
+        kw["filters"] = [("source", "in", list(sources))]
+    if bbox:  # GeoParquet covering-bbox pushdown (geopandas crashes on filters=None + bbox)
+        kw["bbox"] = bbox
+    frames = [gpd.read_parquet(f, **kw) for f in files]
+    return gpd.GeoDataFrame(
+        pd.concat(frames, ignore_index=True), geometry="geometry", crs="EPSG:4326"
+    )
 
 
 def summary(root: str = PROCESSED_ROOT) -> pd.DataFrame:
@@ -209,11 +224,11 @@ __all__ = [
     "KNOWN_DATASETS",
     "PROCESSED_ROOT",
     "REQUIRED_COLUMNS",
-    "gdf_to_obs_df",
     "make_run_id",
     "partition_uri",
     "read_all",
     "summary",
+    "to_obs_gdf",
     "write_partition",
     "write_summary",
 ]

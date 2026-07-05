@@ -13,7 +13,7 @@ from shapely.geometry import Point
 
 from cmrv.labels.observations import (
     COLUMNS,
-    gdf_to_obs_df,
+    to_obs_gdf,
     write_partition,
 )
 
@@ -44,14 +44,14 @@ def _make_gdf(rows: list[dict]) -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(pdf, geometry=geometries, crs="EPSG:4326")
 
 
-def test_gdf_to_obs_df_columns() -> None:
-    """gdf_to_obs_df produces a DataFrame with the canonical column set."""
+def test_to_obs_gdf_columns() -> None:
+    """to_obs_gdf produces a GeoDataFrame with the canonical column set + native geometry."""
     gdf = _make_gdf([{"obs_id": "gbif:1", "source_record_id": "1", "weight": 0.5}])
-    df = gdf_to_obs_df(gdf)
-    assert isinstance(df, pd.DataFrame)
-    assert list(df.columns) == list(COLUMNS)
-    assert len(df) == 1
-    assert isinstance(df["geometry"].iloc[0], bytes)
+    out = to_obs_gdf(gdf)
+    assert isinstance(out, gpd.GeoDataFrame)
+    assert list(out.columns) == list(COLUMNS)
+    assert len(out) == 1
+    assert isinstance(out["geometry"].iloc[0], Point)  # native, not WKB bytes
 
 
 def test_upsert_same_obs_id_keeps_latest() -> None:
@@ -129,11 +129,11 @@ def test_upsert_idempotent() -> None:
 
 
 def test_missing_required_column_raises() -> None:
-    """gdf_to_obs_df raises ValueError when a non-nullable column is missing."""
+    """to_obs_gdf raises ValueError when a non-nullable column is missing."""
     gdf = gpd.GeoDataFrame(
         pd.DataFrame([{"source": "gbif", "weight": 0.5}]),
         geometry=[Point(18.5, -33.9)],
         crs="EPSG:4326",
     )
     with pytest.raises(ValueError, match="missing required"):
-        gdf_to_obs_df(gdf)
+        to_obs_gdf(gdf)
