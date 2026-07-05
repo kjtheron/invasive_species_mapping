@@ -1,24 +1,14 @@
 """Shared monthly-median compositing helpers.
 
 ``monthly_median`` and ``_transform_from_da`` are the compositing primitives used by
-both ``cmrv.ingest.chips`` (training chips) and ``cmrv.infer`` (wall-to-wall
-inference); ``load_pipeline_config`` reads ``configs/pipeline.yaml``.
+both ``cmrv.ingest.chips`` (training chips) and ``cmrv.infer`` (wall-to-wall inference).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import rasterio
 import xarray as xr
-import yaml
 from rasterio.transform import from_bounds
-
-
-def load_pipeline_config(path: str | Path = "configs/pipeline.yaml") -> dict:
-    """Load configs/pipeline.yaml and return as a dict."""
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def monthly_median(da: xr.DataArray) -> xr.DataArray:

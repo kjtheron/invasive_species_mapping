@@ -186,15 +186,3 @@ class_maps:
     16: {name: bare,            members: ["bare"]}
     17: {name: water,           members: ["water"]}
     18: {name: wetland,         members: ["wetland"]}
-
-# ----------------------------------------------------------------------------
-# BioSCape VegPlots (Berg + Eerste, 2022–2023) — field plots.
-# HIGH-QUALITY GROUND TRUTH. GPS + date + species cover %.
-# IAP membership decided from class_maps.<name>.members[].
-# ----------------------------------------------------------------------------
-bioscape_vegplots:
-  site_csv: data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_SiteData.csv
-  plot_cover_csv: data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_PlotCoverage.csv
-  line_intercept_csv: data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/Berg_Eerste_Veg_LineIntercept.csv
-  dominant_cover_min: 40        # species with cover ≥40% promoted to plot label
-  weight: 0.95                  # highest — field-expert identified

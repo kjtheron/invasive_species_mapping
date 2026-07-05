@@ -7,8 +7,8 @@
 ``load_training_labels``
     Spatial + species filter over the merged store — the single entry-point
     for training configs. Returns a geopandas GeoDataFrame in EPSG:4326 (native
-    geometry), clipped to ``aoi_uri`` and filtered to ``species_subset`` (by
-    GBIF usage_key or scientific name).
+    geometry), clipped to ``aoi_uri`` and filtered to ``species_subset``
+    (scientific-name fragments).
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def merge_partitions(
 
 def load_training_labels(
     aoi_uri: str,
-    species_subset: list[str] | list[int] | None = None,
+    species_subset: list[str] | None = None,
     sources: list[str] | None = None,
     min_coord_uncertainty_m: float | None = None,
     max_coord_uncertainty_m: float | None = 500.0,
@@ -63,9 +63,8 @@ def load_training_labels(
     """Load training labels filtered to an AOI and optional species subset.
 
     Filters: source, geom_type, weight, event_date range, coord_uncertainty
-    range (nulls kept), cover, and species (GBIF usage_key ints or
-    scientific-name substrings). Deduplicates on obs_id (latest ingested_at),
-    then clips to the AOI polygon.
+    range (nulls kept), cover, and species (scientific-name substrings).
+    Deduplicates on obs_id (latest ingested_at), then clips to the AOI polygon.
 
     ``min_cover_pct`` is the **pure-pixel gate** — keep only rows whose measured
     ``cover_pct`` ≥ threshold (drops null-cover rows). Off by default; enable
@@ -96,12 +95,8 @@ def load_training_labels(
         mask &= coord.isna() | (coord >= min_coord_uncertainty_m)
 
     if species_subset:
-        int_keys = [s for s in species_subset if isinstance(s, int)]
-        str_frags = [s for s in species_subset if isinstance(s, str)]
         sp = pd.Series(False, index=df.index)
-        if int_keys:
-            sp |= df["gbif_usage_key"].isin(int_keys)
-        for frag in str_frags:
+        for frag in species_subset:
             sp |= df["species_normalized"].str.contains(frag, regex=False, na=False)
         mask &= sp
 

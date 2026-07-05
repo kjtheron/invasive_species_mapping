@@ -1,4 +1,4 @@
-"""Smoke test for cmrv.chips.stats — manifest summary printer."""
+"""Smoke test for cmrv.ingest.stats — manifest summary printer."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from cmrv.chips.stats import chip_stats
+from cmrv.ingest.stats import chip_stats
 
 
 def _write_manifest(tmp_path: Path) -> str:

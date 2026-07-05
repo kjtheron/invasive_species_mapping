@@ -16,8 +16,7 @@ from cmrv.ingest.chips import (
     make_split,
     thin_labels,
 )
-from cmrv.ingest.composite import load_pipeline_config
-from cmrv.io import read_gdf, write_gdf_parquet
+from cmrv.io import load_config, read_gdf, write_gdf_parquet
 from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
 from cmrv.labels.mapwaps import ingest_mapwaps
 from cmrv.labels.merge import load_training_labels, merge_partitions
@@ -182,7 +181,7 @@ def ingest_chips(
     --thin-m: keep one label per species per thin-m cell, before download (default 20).
     --species: restrict to these species (by name fragment). Omit for all.
     """
-    cfg = load_pipeline_config(pipeline)
+    cfg = load_config(pipeline)
 
     labels = load_training_labels(
         aoi_uri=aoi,
@@ -340,7 +339,7 @@ def chips_stats(
     spatially-dominated species, fold × species (if ``make-split`` has run),
     and obs_ids per chip year. No schema or class_map needed.
     """
-    from cmrv.chips.stats import chip_stats
+    from cmrv.ingest.stats import chip_stats
 
     chip_stats(manifest_uri=manifest, top_species=top_species, top_blocks=top_blocks)
 
