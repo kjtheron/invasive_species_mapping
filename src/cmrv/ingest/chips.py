@@ -16,10 +16,13 @@ Output layout::
     {out_prefix}/manifest.parquet                   — chip index (no fold column)
 
 CRS handling:
-    Labels arrive in EPSG:4326.  Composites are built in EPSG:32734 (UTM 34S)
-    by stackstac.  Label points are transformed to UTM for pixel-index math,
-    and chips are sliced directly from the UTM composite — no reprojection of
-    the chip itself, so no rotation-induced missing pixels at corners.
+    Labels arrive in EPSG:4326.  Each (block, year, zone) group is composited in
+    its **own native S2 UTM zone** (``utm_epsg`` of the group centroid), so a KZN/EC
+    chip is not resampled onto a distant zone.  Label points are transformed to that
+    zone for pixel-index math and chips are sliced directly from the composite — no
+    reprojection of the chip itself, so no rotation-induced missing corners.  The
+    manifest stores each point's lon/lat (EPSG:4326), keeping it CRS-agnostic across
+    zones.  Spatial-block / tile grids use SA Albers equal-area (``cmrv.aoi``).
 
 Performance:
     - Tight bounding box around label cluster (not full 20 km block)
@@ -73,7 +76,7 @@ from rasterio.windows import transform as window_transform
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-from cmrv.aoi import SA_ALBERS
+from cmrv.aoi import SA_ALBERS, utm_epsg
 from cmrv.ingest.cloud_mask import apply_scl_mask
 from cmrv.ingest.composite import _transform_from_da, monthly_median
 from cmrv.io import ensure_parent, read_parquet_df, write_parquet_df
@@ -690,8 +693,8 @@ def _process_group(
                     "chip_uri": f"{out_prefix}/{rel_path}",
                     "year": year,
                     "block_id": bid,
-                    "x_utm": float(row.geometry.x),
-                    "y_utm": float(row.geometry.y),
+                    "lon": float(row.lon),  # EPSG:4326 — chip extracted in the group's native zone
+                    "lat": float(row.lat),
                     "valid_frac": valid_frac,
                 }
             )
@@ -1074,14 +1077,13 @@ def make_split(
 
 def _labels_to_gdf(label_pts: pd.DataFrame, manifest: pd.DataFrame) -> gpd.GeoDataFrame:
     """Convert manifest label rows to a GeoDataFrame for spatial splitting."""
-    coords = manifest.drop_duplicates(subset=["obs_id"])[["obs_id", "x_utm", "y_utm"]]
+    coords = manifest.drop_duplicates(subset=["obs_id"])[["obs_id", "lon", "lat"]]
     merged = label_pts.merge(coords, on="obs_id", how="left")
-    gdf = gpd.GeoDataFrame(
+    return gpd.GeoDataFrame(
         merged,
-        geometry=gpd.points_from_xy(merged["x_utm"], merged["y_utm"]),
-        crs="EPSG:32734",
+        geometry=gpd.points_from_xy(merged["lon"], merged["lat"]),
+        crs="EPSG:4326",
     )
-    return gdf.to_crs("EPSG:4326")
 
 
 def _reconcile_manifest(
@@ -1132,7 +1134,6 @@ def extract_training_chips(
     chip_px: int = CHIP_PX,
     resolution_m: int = RESOLUTION_M,
     cloud_cover_max: int = 40,
-    epsg: int = 32734,
     default_year: int = 2023,
     max_workers: int = 6,
     year_fallback: bool = True,
@@ -1163,14 +1164,17 @@ def extract_training_chips(
     if "block_id" not in labels.columns:
         raise ValueError("labels must have a 'block_id' column — spatial-join with blocks first")
 
-    crs = CRS.from_epsg(epsg)
-
     labels = labels.copy()
     if "_year" not in labels.columns:
         ed = pd.to_datetime(labels["event_date"], errors="coerce")
         labels["_year"] = ed.dt.year.fillna(default_year).astype(int)
     if "_zone" not in labels.columns:
         labels["_zone"] = default_zone
+    # Keep each label's lon/lat (labels arrive in EPSG:4326) so the manifest is
+    # CRS-agnostic — chips are extracted per group in the group's native S2 UTM zone.
+    if "lon" not in labels.columns:
+        labels["lon"] = labels.geometry.x
+        labels["lat"] = labels.geometry.y
 
     # Canonical set for this (top-level) call = the thinned labels as passed in,
     # captured before the incremental filter below mutates `labels`. Used at the
@@ -1250,9 +1254,7 @@ def extract_training_chips(
     # Track obs_ids attempted in this pass — used for the Y-1 fallback below.
     attempted_obs_ids = set(labels["obs_id"])
 
-    labels_utm = labels.to_crs(f"EPSG:{epsg}")
-
-    groups = list(labels_utm.groupby(["block_id", "_year", "_zone"]))
+    groups = list(labels.groupby(["block_id", "_year", "_zone"]))  # labels in EPSG:4326
     n_groups = len(groups)
     logger.info("extracting chips: {} groups with {} workers", n_groups, max_workers)
 
@@ -1261,19 +1263,22 @@ def extract_training_chips(
         for g_idx, ((bid, year, zone), grp) in enumerate(groups, 1):
             # each label's month set is chosen by its rainfall zone (winter vs summer)
             grp_months = months_by_zone.get(zone, months_cfg) if months_by_zone else months_cfg
+            # extract this group in its OWN native S2 UTM zone (no cross-zone resampling)
+            g_epsg = utm_epsg(grp["lon"].mean(), grp["lat"].mean())
+            grp_utm = grp.to_crs(f"EPSG:{g_epsg}")
             fut = pool.submit(
                 _process_group,
                 int(bid),
                 int(year),
-                grp,
+                grp_utm,
                 grp_months,
                 bands,
                 out_prefix,
-                crs,
+                CRS.from_epsg(g_epsg),
                 chip_px,
                 resolution_m,
                 cloud_cover_max,
-                epsg,
+                g_epsg,
                 g_idx,
                 n_groups,
                 chipped_months,
@@ -1338,12 +1343,13 @@ def extract_training_chips(
                 labels=fallback_labels,
                 blocks=blocks,
                 months_cfg=months_cfg,
+                months_by_zone=months_by_zone,
+                default_zone=default_zone,
                 bands=bands,
                 out_prefix=out_prefix,
                 chip_px=chip_px,
                 resolution_m=resolution_m,
                 cloud_cover_max=cloud_cover_max,
-                epsg=epsg,
                 default_year=default_year,
                 max_workers=max_workers,
                 year_fallback=False,

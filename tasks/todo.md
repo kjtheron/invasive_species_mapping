@@ -68,9 +68,11 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
   own months from the manifest (per-obs day-of-year). Summer months from Masemola et al. 2020
   (IJAEOG 93): dry-winter senescence / Acacia flowering / peak summer growth, >80% each. AOI
   expanded to national SA (`aoi-sa`, `fetch_provinces`) so KZN/EC labels aren't clipped; tile+
-  block grids in **SA Albers equal-area** (`cmrv.aoi.SA_ALBERS`), not UTM 34S. *Deferred:* a
-  true rainfall-seasonality-zone layer (Schulze) where a province is mixed (EC south coast);
-  per-zone UTM for the chip pixel grid (chips still extract in EPSG:32734).
+  block grids in **SA Albers equal-area** (`cmrv.aoi.SA_ALBERS`), not UTM 34S. Chip pixel grid
+  is **per-image native S2 UTM zone** (`utm_epsg` per group; manifest stores lon/lat, so embed
+  is CRS-agnostic); inference composites+embeds in the native zone then warps the output map to
+  SA Albers (`infer_box(out_crs=SA_ALBERS)`) so tiles mosaic. *Deferred:* a true rainfall-
+  seasonality-zone layer (Schulze) where a province is mixed (EC south coast).
 - [ ] **Cover gate** — flip `load_training_labels(min_cover_pct≈60)` on once enough cover-bearing data exists
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)

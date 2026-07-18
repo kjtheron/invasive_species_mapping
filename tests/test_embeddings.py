@@ -57,8 +57,8 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
                     "month_label": mo,
                     "chip_uri": str(p),
                     "block_id": 7,
-                    "x_utm": 300000.0,
-                    "y_utm": 6200000.0,
+                    "lon": 25.0,
+                    "lat": -30.0,
                     "valid_frac": 1.0,
                 }
             )
