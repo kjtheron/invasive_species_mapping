@@ -73,7 +73,18 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
   is CRS-agnostic); inference composites+embeds in the native zone then warps the output map to
   SA Albers (`infer_box(out_crs=SA_ALBERS)`) so tiles mosaic. *Deferred:* a true rainfall-
   seasonality-zone layer (Schulze) where a province is mixed (EC south coast).
-- [ ] **Cover gate** — flip `load_training_labels(min_cover_pct≈60)` on once enough cover-bearing data exists
+- [ ] **Caching (perf)** — memoise repeated / expensive work as the store + AOI grow:
+  - *Observation store:* `observations.read_all` rebuilds the whole store (`gpd.read_parquet` per
+    partition + `pd.concat`) on every call — cache by (root, partition mtimes, sources, bbox);
+    invalidate when a partition file changes. `summary`/`write_summary` and `sanlc` ingest each
+    re-read via `read_all` — they'd ride the same cache.
+  - *Ingest:* skip re-ingesting a source partition whose raw inputs are unchanged (hash the raw
+    file(s) / figshare md5 → skip `write_partition` if the partition already reflects them).
+  - *STAC:* cache `_query_items` results (STAC item search is the slow, rate-limited step) keyed by
+    (bbox, date-window, cloud_cover_max); optionally cache signed asset hrefs within their TTL.
+  - *Encoder forward:* the UniverSat forward is the dominant inference cost and is deterministic for
+    a frozen encoder — cache dense-token embeddings per (tile, month-set, year) so re-runs
+    (new head, threshold sweep, TTA compare) skip re-embedding; keys off the composite, not the head.
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)
 - [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)
