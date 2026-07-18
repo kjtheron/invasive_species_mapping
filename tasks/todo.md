@@ -18,8 +18,13 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 - **Store inspector** — `cmrv labels` (per-source counts + coord-uncertainty/cover coverage)
 - **MapWAPS native/land-cover classes** — `_LULC_TO_CLASS` crosswalks all 23 MapWAPS
   classes to `western_cape_landcover` members (native→VegMap biome, transformed→land
-  cover); `iap_only` dropped. Store: mapwaps 4818→27009. SANLC IAP-exclusion now
-  buffers only species/genus rows (not the new native points).
+  cover); `iap_only` dropped. SANLC IAP-exclusion now buffers only species/genus rows.
+- **MapWAPS multi-catchment (SA-wide)** — generic adapter + `CATCHMENTS` registry
+  (per-catchment cols/CRS/date) over Olifants-Doring (WC) + Tugela (KZN) + uMzimvubu
+  (EC); `download/mapwaps.py` fetches TrainingData from figshare. New classes:
+  `renosterveld` (split from fynbos), `savanna` (Indigenous Bush_*), `populus_spp`
+  (Alien_Poplar). Store **37,516 obs** across 3 provinces, all resolve under
+  `western_cape_landcover`. Luvuvhu (dup of Tugela) + Sabie-Croc (empty) broken upstream.
 - **Chip extraction** — `cmrv ingest-chips` (thin → 64×64 per obs×month, 10 km blocks,
   per-label window compute, incremental + self-reconcile to the thinned set)
 - **Split** — `cmrv make-split` (iterative-stratification block folds on `class_id`,
@@ -57,7 +62,12 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 
 ## Deferred (designed, not built)
 
-- [ ] **Region-aware months** — per-zone month set (WC = Feb/May/Sep; add summer-rainfall calendars when other-province data lands)
+- [ ] **Region-aware / spectrally-distinct months per province** — NOW CONCRETE: the store
+  spans winter-rainfall (WC, Feb/May/Sep) and summer-rainfall (KZN/EC — Tugela, uMzimvubu)
+  provinces, whose alien-plant + veg spectra peak in different months. Pick per-region month
+  sets that maximise spectral separability of IAP vs native (summer-rainfall greens up
+  Nov–Mar; deciduous alien poplar/wattle phenology differs). Config `months` becomes a dict
+  keyed by rainfall-seasonality zone; spatial-join each label to its zone at chip time.
 - [ ] **Cover gate** — flip `load_training_labels(min_cover_pct≈60)` on once enough cover-bearing data exists
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)

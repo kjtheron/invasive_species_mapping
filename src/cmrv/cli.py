@@ -18,7 +18,7 @@ from cmrv.ingest.chips import (
 )
 from cmrv.io import load_config, read_gdf, write_gdf_parquet
 from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
-from cmrv.labels.mapwaps import ingest_mapwaps
+from cmrv.labels.mapwaps import CATCHMENTS, ingest_mapwaps
 from cmrv.labels.merge import load_training_labels, merge_partitions
 from cmrv.labels.observations import PROCESSED_ROOT
 from cmrv.labels.sanlc import ingest_sanlc
@@ -103,16 +103,20 @@ def labels_bioscape_ingest(
 
 def labels_mapwaps_ingest(
     root: str = PROCESSED_ROOT,
+    catchment: str | None = None,
 ) -> None:
-    """Ingest MapWAPS Olifants-Doring training points → store (source=mapwaps).
+    """Ingest MapWAPS field points → store (source=mapwaps), all catchments by default.
 
-    All mappable classes ingested — IAP genera (Alien_*), native biomes, and
-    transformed land cover — each crosswalked to a ``western_cape_landcover`` member
-    (Shade / Burnt / Alien_Other dropped). Assign class_id at make-split via
-    ``--class-map-name western_cape_landcover``.
+    Registered catchments: Olifants-Doring (WC), Tugela (KZN), uMzimvubu (EC).
+    All mappable classes ingested — IAP genera (Alien_*), native biomes, transformed
+    land cover — each crosswalked to a ``western_cape_landcover`` member (Shade /
+    Burnt / Bracken / Alien_Other dropped). Pass ``--catchment <name>`` for one.
+    Assign class_id at make-split via ``--class-map-name western_cape_landcover``.
     """
-    path = ingest_mapwaps(root=root)
-    logger.success("mapwaps ingest complete — {}", path)
+    keys = [catchment] if catchment else list(CATCHMENTS)
+    for key in keys:
+        ingest_mapwaps(key, root=root)
+    logger.success("mapwaps ingest complete — {} catchment(s)", len(keys))
 
 
 def labels_sanlc_ingest(
