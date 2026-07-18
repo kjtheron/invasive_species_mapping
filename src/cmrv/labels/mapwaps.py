@@ -251,8 +251,3 @@ def ingest_mapwaps(
     path = write_partition(out, cat.dataset, root=root, run_id=run_id)
     logger.success("{}: {} rows → {}", cat.dataset, len(rows), path)
     return path
-
-
-def ingest_all(root: str = PROCESSED_ROOT) -> list[str]:
-    """Ingest every registered MapWAPS catchment. Returns the written partition paths."""
-    return [ingest_mapwaps(key, root=root) for key in CATCHMENTS]

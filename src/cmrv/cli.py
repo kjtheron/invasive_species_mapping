@@ -19,8 +19,8 @@ from cmrv.ingest.chips import (
 from cmrv.io import load_config, read_gdf, write_gdf_parquet
 from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
 from cmrv.labels.mapwaps import CATCHMENTS, ingest_mapwaps
-from cmrv.labels.merge import load_training_labels, merge_partitions
-from cmrv.labels.observations import PROCESSED_ROOT
+from cmrv.labels.merge import load_training_labels
+from cmrv.labels.observations import PROCESSED_ROOT, write_summary
 from cmrv.labels.sanlc import ingest_sanlc
 
 
@@ -173,7 +173,7 @@ def labels_inspect(
     also prints a filtered training-label preview; ``--out`` writes that
     filtered GeoParquet.
     """
-    print(merge_partitions(root=root, summary_uri=summary_out))
+    print(write_summary(root=root, out_uri=summary_out))
     logger.success("summary → {}", summary_out)
 
     if not aoi:
