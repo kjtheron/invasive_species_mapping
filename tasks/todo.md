@@ -80,11 +80,13 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
     re-read via `read_all` — they'd ride the same cache.
   - *Ingest:* skip re-ingesting a source partition whose raw inputs are unchanged (hash the raw
     file(s) / figshare md5 → skip `write_partition` if the partition already reflects them).
-  - *STAC:* cache `_query_items` results (STAC item search is the slow, rate-limited step) keyed by
-    (bbox, date-window, cloud_cover_max); optionally cache signed asset hrefs within their TTL.
-  - *Encoder forward:* the UniverSat forward is the dominant inference cost and is deterministic for
-    a frozen encoder — cache dense-token embeddings per (tile, month-set, year) so re-runs
-    (new head, threshold sweep, TTA compare) skip re-embedding; keys off the composite, not the head.
+  - *STAC:* **cannot cache `_query_items` output** — it signs asset hrefs inline and the MPC SAS
+    tokens are ~1 h TTL, so a cache would serve stale/expired URLs. Only the *unsigned* search
+    metadata (item ids / geometry / properties) is static; caching would mean splitting signing out
+    of search and re-signing on use — not worth it. Leave STAC uncached.
+  - *Encoder forward:* training embeddings are **already persisted** (`embed` → Zarr cube; `train-head`
+    reuses them, no re-forward). Inference-time embedding cache is **not wanted** (decided) — infer
+    re-embeds each run.
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)
 - [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)
