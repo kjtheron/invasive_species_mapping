@@ -9,7 +9,7 @@ import geopandas as gpd
 import tyro
 from loguru import logger
 
-from cmrv.aoi import build_tile_grid, fetch_provinces, fetch_western_cape
+from cmrv.aoi import SA_ALBERS, build_tile_grid, fetch_provinces, fetch_western_cape
 from cmrv.ingest.chips import (
     build_spatial_blocks,
     extract_training_chips,
@@ -56,7 +56,7 @@ def aoi_wc(
     gdf = fetch_western_cape(
         source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=target_crs
     )
-    area_km2 = gdf.to_crs("EPSG:32734").area.sum() / 1e6
+    area_km2 = gdf.to_crs(SA_ALBERS).area.sum() / 1e6
     logger.info("Western Cape AOI: {} feature, area = {:.0f} km^2", len(gdf), area_km2)
     write_gdf_parquet(gdf, out)
     logger.success("wrote {}", out)
@@ -78,7 +78,7 @@ def aoi_sa(
     gdf = fetch_provinces(
         None, source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=target_crs
     )
-    area_km2 = gdf.to_crs("EPSG:32734").area.sum() / 1e6
+    area_km2 = gdf.to_crs(SA_ALBERS).area.sum() / 1e6
     logger.info("South Africa AOI: {} feature, area = {:.0f} km^2", len(gdf), area_km2)
     write_gdf_parquet(gdf, out)
     logger.success("wrote {}", out)
@@ -88,12 +88,15 @@ def aoi_tiles(
     aoi: str = "data/aoi/processed/western_cape.parquet",
     km: float = 10.0,
     out: str = "data/aoi/processed/tiles.parquet",
-    crs: str = "EPSG:32734",
+    crs: str = SA_ALBERS,
 ) -> None:
-    """Build a square tile grid over the AOI and write as GeoParquet (inference unit)."""
+    """Build a square tile grid over the AOI and write as GeoParquet (inference unit).
+
+    Grid CRS defaults to national equal-area SA Albers (true-square tiles country-wide).
+    """
     gdf = read_gdf(aoi)
     tiles = build_tile_grid(gdf, tile_km=km, crs=crs)
-    logger.info("built {} tiles of {} km in {}", len(tiles), km, crs)
+    logger.info("built {} tiles of {} km", len(tiles), km)
     write_gdf_parquet(tiles, out)
     logger.success("wrote {}", out)
 

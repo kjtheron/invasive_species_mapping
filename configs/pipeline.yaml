@@ -1,7 +1,8 @@
 aoi:
   path: data/aoi/processed/western_cape.parquet
-  crs_utm: EPSG:32734  # UTM 34S — true-area work for tile grid
   tile_km: 10
+  # tile/block grids build in SA Albers equal-area (see cmrv.aoi.SA_ALBERS) — national,
+  # true-square tiles country-wide; not UTM 34S (skews outside its zone).
 
 # Three phenology-tuned months for the WESTERN CAPE (winter-rainfall
 # Mediterranean — NOT the summer-rainfall calendar of most SA literature):
@@ -24,16 +25,21 @@ months: &winter_months
 # Region-aware months for chip extraction (ingest-chips). Each label picks its set
 # from its province (aoi_admin1 → zone). infer / ingest-month keep using `months`.
 #   • winter_rainfall (WC): feb dry-summer trough / may autumn / sep spring+Acacia bloom.
-#   • summer_rainfall (KZN/EC/…): the flipped cycle —
-#       feb — peak wet-season green (native grassland/savanna full; evergreen aliens blend).
-#       jun — dry-winter trough: evergreen Pine/Wattle/Gum vs dormant brown grass; poplar leaf-off.
-#       sep — late winter: black/silver wattle flowering + spring green-up onset.
+#   • summer_rainfall (KZN/EC/Limpopo/Mpumalanga): jul / sep / dec, from Masemola et al.
+#     2020 "Sentinel-2 time series … optimal features and time window for mapping invasive
+#     Acacia … KwaZulu-Natal" (Int. J. Appl. Earth Obs. Geoinf. 93, 102207). Best Acacia
+#     accuracy came from dry + flowering + growing-season imagery; jul/sep/dec each >80%:
+#       jul — dry-winter senescence: native grassland/savanna dormant & brown, evergreen
+#             Pine/Wattle/Gum (and structural canopy) stand out most.
+#       sep — Acacia (mearnsii/dealbata) flowering + early green-up — wattle-specific signal.
+#       dec — early-to-peak summer growth (Nov–mid-Mar): full-canopy red-edge separability.
+#     Red-edge bands/indices dominate discrimination (B05–B07, B8A), as in the WC set.
 months_by_zone:
   winter_rainfall: *winter_months
   summer_rainfall:
-    - {start: "2023-02-01", end: "2023-02-28", label: feb}
-    - {start: "2023-06-01", end: "2023-06-30", label: jun}
+    - {start: "2023-07-01", end: "2023-07-31", label: jul}
     - {start: "2023-09-01", end: "2023-09-30", label: sep}
+    - {start: "2023-12-01", end: "2023-12-31", label: dec}
 
 # Province (aoi_admin1) → rainfall-seasonality zone. Unlisted → winter_rainfall (WC default).
 admin1_zone:

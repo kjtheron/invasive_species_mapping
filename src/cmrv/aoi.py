@@ -1,8 +1,9 @@
-"""AOI utilities: Western Cape province boundary + tile grid (scales to SA later).
+"""AOI utilities: SA province boundaries (WC or national) + equal-area tile grid.
 
 Boundary source: **GeoBoundaries gbOpen ADM1** (provinces), CC-BY 4.0
 (Runfola et al. 2020). Downloaded + cached under ``data/aoi/raw/``; pass a local
-``source`` file to override.
+``source`` file to override. ``fetch_provinces`` dissolves any subset (or all, for
+national SA); tile/block grids build in :data:`SA_ALBERS` equal-area.
 """
 
 from __future__ import annotations
@@ -30,6 +31,16 @@ WC_BUFFER_M = 1_000.0
 # Prince Edward Islands are administratively WC but ~2000 km offshore (~-46.9°S);
 # drop anything south of this so the tile grid doesn't span the ocean.
 MAINLAND_MIN_LAT = -35.0
+
+# National equal-area CRS for tile/block grids over all of South Africa: Albers Equal
+# Area Conic, standard parallels by the 1/6 rule over SA's ~-22..-35° lat range, central
+# meridian 25°E. Equal-area everywhere in SA — unlike UTM 34S, which distorts badly for
+# the KZN/EC/Limpopo/Mpumalanga labels (zones 35–36). The official SA-BSU Albers
+# (EPSG:9219) isn't in the bundled PROJ db, so use a PROJ4 string (ref: OSGeo SA-Albers).
+SA_ALBERS = (
+    "+proj=aea +lat_1=-24 +lat_2=-33 +lat_0=0 +lon_0=25 +x_0=0 +y_0=0 "
+    "+datum=WGS84 +units=m +no_defs"
+)
 
 
 def _urlopen(url: str, timeout: float):
@@ -108,14 +119,14 @@ def fetch_provinces(
     if len(parts) < n_parts:
         logger.info("dropped {} far-offshore part(s) (Prince Edward Is.)", n_parts - len(parts))
 
-    sel_m = parts.to_crs("EPSG:32734")
+    sel_m = parts.to_crs(SA_ALBERS)  # equal-area: correct area + simplify anywhere in SA
     dissolved = make_valid(unary_union(sel_m.geometry))
     nv_before = _n_vertices(dissolved)
     if simplify_m > 0:
         dissolved = make_valid(dissolved.simplify(simplify_m, preserve_topology=True))
     buffered = dissolved.buffer(buffer_m) if buffer_m > 0 else dissolved
 
-    area_km2 = gpd.GeoSeries([buffered], crs="EPSG:32734").area.iloc[0] / 1e6
+    area_km2 = gpd.GeoSeries([buffered], crs=SA_ALBERS).area.iloc[0] / 1e6
     logger.info(
         "{}: vertices {} → {} (simplify {} m), area {:.0f} km^2, buffer {:.0f} m",
         label,
@@ -125,9 +136,7 @@ def fetch_provinces(
         area_km2,
         buffer_m,
     )
-    return gpd.GeoDataFrame(
-        {"name": [label]}, geometry=[buffered], crs="EPSG:32734"
-    ).to_crs(out_crs)
+    return gpd.GeoDataFrame({"name": [label]}, geometry=[buffered], crs=SA_ALBERS).to_crs(out_crs)
 
 
 def fetch_western_cape(
@@ -145,10 +154,13 @@ def fetch_western_cape(
 def build_tile_grid(
     aoi: gpd.GeoDataFrame,
     tile_km: float,
-    crs: str = "EPSG:32734",
+    crs: str = SA_ALBERS,
     min_overlap_frac: float = 0.01,
 ) -> gpd.GeoDataFrame:
     """Build a square tile grid covering the AOI. Grid is computed in the given metric CRS.
+
+    Defaults to :data:`SA_ALBERS` (national equal-area) so tiles are true-square across all
+    provinces; UTM 34S would skew tiles far from zone 34 (KZN/EC/Limpopo/Mpumalanga).
 
     `min_overlap_frac` is the minimum fraction of a tile's area that must fall inside the AOI
     for the tile to be kept. The default (1%) filters sliver tiles introduced by reprojection
