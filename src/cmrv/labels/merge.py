@@ -1,14 +1,10 @@
-"""Merge + filter helpers for the WC observation store.
-
-``merge_partitions``
-    Union all source partitions, deduplicate on ``obs_id`` (keeping max
-    ``ingested_at``), write ``summary.parquet``.
+"""Filter helper for the observation store.
 
 ``load_training_labels``
     Spatial + species filter over the merged store — the single entry-point
     for training configs. Returns a geopandas GeoDataFrame in EPSG:4326 (native
     geometry), clipped to ``aoi_uri`` and filtered to ``species_subset``
-    (scientific-name fragments).
+    (scientific-name fragments). The per-source summary is ``observations.write_summary``.
 """
 
 from __future__ import annotations
@@ -18,32 +14,12 @@ import pandas as pd
 from loguru import logger
 
 from cmrv.io import read_gdf
-from cmrv.labels.observations import PROCESSED_ROOT, read_all, write_summary
+from cmrv.labels.observations import PROCESSED_ROOT, read_all
 
 
 def _dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
     """Keep one row per obs_id — the latest by ingested_at."""
     return df.sort_values("ingested_at").drop_duplicates("obs_id", keep="last")
-
-
-def merge_partitions(
-    root: str = PROCESSED_ROOT,
-    summary_uri: str = "data/labels/processed/summary.parquet",
-) -> pd.DataFrame:
-    """Union all source partitions, deduplicate on obs_id, write summary.
-
-    Returns the summary DataFrame (per-source × per-category counts +
-    fraction with non-null coord_uncertainty_m).
-    """
-    table = read_all(root)
-    n_deduped = len(_dedup_latest(table))
-    logger.info(
-        "merge_partitions: {} raw rows → {} after dedup (dropped {})",
-        len(table),
-        n_deduped,
-        len(table) - n_deduped,
-    )
-    return write_summary(root=root, out_uri=summary_uri)
 
 
 def load_training_labels(
