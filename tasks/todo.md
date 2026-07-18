@@ -16,6 +16,10 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
   (Olifants-Doring IAP genera), `labels-sanlc-ingest` (SANLC 2018/20/22 accuracy points
   + VegMap biome). IAP membership from class-map `members[]`.
 - **Store inspector** — `cmrv labels` (per-source counts + coord-uncertainty/cover coverage)
+- **MapWAPS native/land-cover classes** — `_LULC_TO_CLASS` crosswalks all 23 MapWAPS
+  classes to `western_cape_landcover` members (native→VegMap biome, transformed→land
+  cover); `iap_only` dropped. Store: mapwaps 4818→27009. SANLC IAP-exclusion now
+  buffers only species/genus rows (not the new native points).
 - **Chip extraction** — `cmrv ingest-chips` (thin → 64×64 per obs×month, 10 km blocks,
   per-label window compute, incremental + self-reconcile to the thinned set)
 - **Split** — `cmrv make-split` (iterative-stratification block folds on `class_id`,
@@ -57,9 +61,4 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 - [ ] **Cover gate** — flip `load_training_labels(min_cover_pct≈60)` on once enough cover-bearing data exists
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)
-- [ ] **MapWAPS native/land-cover classes** — `labels-mapwaps-ingest` currently runs
-  `iap_only` (keeps only the 4 alien genera). MapWAPS Olifants-Doring carries ~23 LULC
-  classes incl. native + land-cover; remap those to `western_cape_landcover` (a
-  MapWAPS-LULC → our-class crosswalk, like the SANLC adapter) and drop `iap_only` to
-  gain free extra training data.
 - [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)
