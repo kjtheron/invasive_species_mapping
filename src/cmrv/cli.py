@@ -9,7 +9,7 @@ import geopandas as gpd
 import tyro
 from loguru import logger
 
-from cmrv.aoi import build_tile_grid, fetch_western_cape
+from cmrv.aoi import build_tile_grid, fetch_provinces, fetch_western_cape
 from cmrv.ingest.chips import (
     build_spatial_blocks,
     extract_training_chips,
@@ -58,6 +58,28 @@ def aoi_wc(
     )
     area_km2 = gdf.to_crs("EPSG:32734").area.sum() / 1e6
     logger.info("Western Cape AOI: {} feature, area = {:.0f} km^2", len(gdf), area_km2)
+    write_gdf_parquet(gdf, out)
+    logger.success("wrote {}", out)
+
+
+def aoi_sa(
+    out: str = "data/aoi/processed/south_africa.parquet",
+    source: str | None = None,
+    buffer_m: float = 1000.0,
+    simplify_m: float = 200.0,
+    target_crs: str = "EPSG:4326",
+) -> None:
+    """Build a national South Africa AOI (all 9 provinces dissolved) → GeoParquet.
+
+    The **training** AOI for multi-province chip extraction (labels span WC/KZN/EC/…);
+    inference still uses the WC AOI (``aoi-wc``). Boundary from GeoBoundaries gbOpen
+    ADM1; drops the offshore Prince Edward Islands. Pass ``--source`` for a local file.
+    """
+    gdf = fetch_provinces(
+        None, source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=target_crs
+    )
+    area_km2 = gdf.to_crs("EPSG:32734").area.sum() / 1e6
+    logger.info("South Africa AOI: {} feature, area = {:.0f} km^2", len(gdf), area_km2)
     write_gdf_parquet(gdf, out)
     logger.success("wrote {}", out)
 
@@ -172,7 +194,7 @@ def labels_inspect(
 
 
 def ingest_chips(
-    aoi: str = "data/aoi/processed/western_cape.parquet",
+    aoi: str = "data/aoi/processed/south_africa.parquet",
     pipeline: str = "configs/pipeline.yaml",
     out_prefix: str = "data/chips/train",
     root: str = PROCESSED_ROOT,
@@ -213,6 +235,12 @@ def ingest_chips(
         logger.warning("no labels found — nothing to extract")
         return
 
+    # Region-aware months: each label's rainfall zone (from its province) picks its
+    # month set at extraction time (winter- vs summer-rainfall phenology).
+    admin1_zone = cfg.get("admin1_zone", {})
+    labels["_zone"] = labels["aoi_admin1"].map(admin1_zone).fillna("winter_rainfall")
+    logger.info("label zones: {}", dict(labels["_zone"].value_counts()))
+
     # Thin BEFORE fetching imagery so we never download chips we'd discard.
     labels = thin_labels(labels, thin_m=thin_m)
 
@@ -229,6 +257,7 @@ def ingest_chips(
         labels=labels,
         blocks=blocks,
         months_cfg=cfg["months"],
+        months_by_zone=cfg.get("months_by_zone"),
         bands=cfg["s2_bands"],
         out_prefix=out_prefix,
         cloud_cover_max=cfg.get("cloud_cover_max", 40),
@@ -445,6 +474,7 @@ def main() -> None:
     tyro.extras.subcommand_cli_from_dict(
         {
             "aoi-wc": aoi_wc,
+            "aoi-sa": aoi_sa,
             "aoi-tiles": aoi_tiles,
             "labels-bioscape-ingest": labels_bioscape_ingest,
             "labels-mapwaps-ingest": labels_mapwaps_ingest,

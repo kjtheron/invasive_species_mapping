@@ -59,14 +59,16 @@ def embed_chips(
     out_uri: str,
     encoder: Embedder,
     *,
-    months: tuple[str, ...] = ("feb", "may", "sep"),
+    min_months: int = 3,
     scale: float = 1.0 / 10000,
     min_valid_frac: float = 0.5,
     batch: int = 8,
     num_workers: int = 4,
 ) -> str:
-    """Embed every obs with all ``months`` present → single Zarr (emb + obs_id/block_id).
+    """Embed every obs with >= ``min_months`` present → single Zarr (emb + obs_id/block_id).
 
+    Each obs's months come from its own manifest rows, so winter-rainfall (feb/may/sep)
+    and summer-rainfall (feb/jun/sep) obs each embed with their own day-of-year vector.
     Class-scheme-agnostic (no class_id/fold baked in — those come from make-split and
     vary per experiment); the loader joins them by obs_id at train time.
     """
@@ -74,37 +76,43 @@ def embed_chips(
     if min_valid_frac > 0 and "valid_frac" in man.columns:
         man = man[man.groupby("obs_id")["valid_frac"].transform("min") >= min_valid_frac]
 
-    recs = []
+    recs = []  # (obs_id, block_id, x_utm, y_utm, dvec, [chip_uri date-ordered])
     for obs_id, g in man.groupby("obs_id"):
         by_month = dict(zip(g["month_label"], g["chip_uri"], strict=False))
-        if all(mo in by_month for mo in months):
-            r = g.iloc[0]
-            recs.append(
-                (
-                    obs_id,
-                    int(r["block_id"]),
-                    float(r["x_utm"]),
-                    float(r["y_utm"]),
-                    [by_month[mo] for mo in months],
-                )
+        # Date-order this obs's own months so the stack + its day-of-year vector align.
+        # ponytail: every zone configures min_months months → uniform T for batching.
+        present = sorted(by_month, key=lambda mo: MONTH_DOY[mo])[:min_months]
+        if len(present) < min_months:
+            continue
+        r = g.iloc[0]
+        recs.append(
+            (
+                obs_id,
+                int(r["block_id"]),
+                float(r["x_utm"]),
+                float(r["y_utm"]),
+                [MONTH_DOY[mo] for mo in present],
+                [by_month[mo] for mo in present],
             )
+        )
     if not recs:
-        raise ValueError("no obs with all configured months present")
+        raise ValueError(f"no obs with >= {min_months} months present")
 
     torch.set_num_threads(os.cpu_count() or 1)  # all cores for the forward
     loader = DataLoader(
         _ChipDataset(recs, scale),
         batch_size=batch,
-        shuffle=False,  # batches arrive in recs order → aligns with the metadata below
+        shuffle=False,  # batches arrive in recs order → aligns with dvecs + metadata below
         num_workers=num_workers,
         pin_memory=getattr(encoder, "device", "cpu").startswith("cuda"),
     )
-    dvec = np.array([MONTH_DOY[mo] for mo in months])
+    dvecs = np.array([r[4] for r in recs])  # (N, T) per-obs day-of-year (zone-dependent)
     embs, done = [], 0
     for stacks in loader:  # (B, T, C, H, W) float32, prefetched by the workers
         s = stacks.numpy()
-        embs.append(encoder.embed(s, np.tile(dvec, (s.shape[0], 1))))
-        done += s.shape[0]
+        b = s.shape[0]
+        embs.append(encoder.embed(s, dvecs[done : done + b]))
+        done += b
         logger.info("embedded {}/{}", done, len(recs))
     emb = np.concatenate(embs).astype("float32")
 

@@ -16,10 +16,32 @@ aoi:
 #   • `cmrv ingest-chips` substitutes each label's event_date year, so the 3
 #     windows come from the SAME year as the label (single-year phenology).
 # The temporal head masks any month that has no cloud-free composite.
-months:
+months: &winter_months
   - {start: "2023-02-01", end: "2023-02-28", label: feb}
   - {start: "2023-05-01", end: "2023-05-31", label: may}
   - {start: "2023-09-01", end: "2023-09-30", label: sep}
+
+# Region-aware months for chip extraction (ingest-chips). Each label picks its set
+# from its province (aoi_admin1 → zone). infer / ingest-month keep using `months`.
+#   • winter_rainfall (WC): feb dry-summer trough / may autumn / sep spring+Acacia bloom.
+#   • summer_rainfall (KZN/EC/…): the flipped cycle —
+#       feb — peak wet-season green (native grassland/savanna full; evergreen aliens blend).
+#       jun — dry-winter trough: evergreen Pine/Wattle/Gum vs dormant brown grass; poplar leaf-off.
+#       sep — late winter: black/silver wattle flowering + spring green-up onset.
+months_by_zone:
+  winter_rainfall: *winter_months
+  summer_rainfall:
+    - {start: "2023-02-01", end: "2023-02-28", label: feb}
+    - {start: "2023-06-01", end: "2023-06-30", label: jun}
+    - {start: "2023-09-01", end: "2023-09-30", label: sep}
+
+# Province (aoi_admin1) → rainfall-seasonality zone. Unlisted → winter_rainfall (WC default).
+admin1_zone:
+  western_cape: winter_rainfall
+  kwazulu_natal: summer_rainfall
+  eastern_cape: summer_rainfall
+  limpopo: summer_rainfall
+  mpumalanga: summer_rainfall
 
 s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
 # Scene-level cloud cover cap. SCL masking handles per-pixel cloud removal,

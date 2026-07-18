@@ -1126,6 +1126,8 @@ def extract_training_chips(
     bands: list[str],
     out_prefix: str,
     *,
+    months_by_zone: dict[str, list[dict]] | None = None,
+    default_zone: str = "winter_rainfall",
     chip_px: int = CHIP_PX,
     resolution_m: int = RESOLUTION_M,
     cloud_cover_max: int = 40,
@@ -1166,6 +1168,8 @@ def extract_training_chips(
     if "_year" not in labels.columns:
         ed = pd.to_datetime(labels["event_date"], errors="coerce")
         labels["_year"] = ed.dt.year.fillna(default_year).astype(int)
+    if "_zone" not in labels.columns:
+        labels["_zone"] = default_zone
 
     # Canonical set for this (top-level) call = the thinned labels as passed in,
     # captured before the incremental filter below mutates `labels`. Used at the
@@ -1247,19 +1251,21 @@ def extract_training_chips(
 
     labels_utm = labels.to_crs(f"EPSG:{epsg}")
 
-    groups = list(labels_utm.groupby(["block_id", "_year"]))
+    groups = list(labels_utm.groupby(["block_id", "_year", "_zone"]))
     n_groups = len(groups)
     logger.info("extracting chips: {} groups with {} workers", n_groups, max_workers)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
-        for g_idx, ((bid, year), grp) in enumerate(groups, 1):
+        for g_idx, ((bid, year, zone), grp) in enumerate(groups, 1):
+            # each label's month set is chosen by its rainfall zone (winter vs summer)
+            grp_months = months_by_zone.get(zone, months_cfg) if months_by_zone else months_cfg
             fut = pool.submit(
                 _process_group,
                 int(bid),
                 int(year),
                 grp,
-                months_cfg,
+                grp_months,
                 bands,
                 out_prefix,
                 crs,
