@@ -52,10 +52,10 @@ def chip_stats(
     print(f"  unique obs_ids:     {_fmt_int(n_obs)}")
     print(f"  unique species:     {_fmt_int(n_species)}")
     print(f"  unique blocks:      {_fmt_int(n_blocks)}")
-    if "x_utm" in m.columns and "y_utm" in m.columns:
-        x0, x1 = m["x_utm"].min(), m["x_utm"].max()
-        y0, y1 = m["y_utm"].min(), m["y_utm"].max()
-        print(f"  spatial extent:     {(x1 - x0) / 1000:.0f} km × {(y1 - y0) / 1000:.0f} km (UTM)")
+    if "lon" in m.columns and "lat" in m.columns:
+        lon0, lon1 = m["lon"].min(), m["lon"].max()
+        lat0, lat1 = m["lat"].min(), m["lat"].max()
+        print(f"  spatial extent:     lon {lon0:.2f}..{lon1:.2f}, lat {lat0:.2f}..{lat1:.2f}")
 
     # --- species ---
     species_obs = (

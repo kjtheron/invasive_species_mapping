@@ -43,6 +43,15 @@ SA_ALBERS = (
 )
 
 
+def utm_epsg(lon: float, lat: float) -> int:
+    """UTM EPSG for a lon/lat — matches Sentinel-2's native MGRS UTM zone.
+
+    Used to extract each chip / inference box in its **own** S2 zone (no cross-zone
+    resampling), rather than forcing everything onto one national UTM zone.
+    """
+    return (32600 if lat >= 0 else 32700) + int((lon + 180) // 6) + 1
+
+
 def _urlopen(url: str, timeout: float):
     req = urllib.request.Request(url, headers={"User-Agent": "catchment-mrv"})
     return urllib.request.urlopen(req, timeout=timeout)

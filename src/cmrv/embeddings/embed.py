@@ -21,14 +21,9 @@ import rasterio
 import torch
 import xarray as xr
 from loguru import logger
-from pyproj import Transformer
 from torch.utils.data import DataLoader, Dataset
 
 from cmrv.embeddings.base import MONTH_DOY, Embedder
-
-# CRS the chips were extracted in (must match cmrv.ingest.chips epsg); point
-# coords are reprojected from this to EPSG:4326 for a zone-agnostic point index.
-CHIP_CRS = "EPSG:32734"
 
 
 def _load_stack(uris: list[str], scale: float) -> np.ndarray:
@@ -76,7 +71,7 @@ def embed_chips(
     if min_valid_frac > 0 and "valid_frac" in man.columns:
         man = man[man.groupby("obs_id")["valid_frac"].transform("min") >= min_valid_frac]
 
-    recs = []  # (obs_id, block_id, x_utm, y_utm, dvec, [chip_uri date-ordered])
+    recs = []  # (obs_id, block_id, lon, lat, dvec, [chip_uri date-ordered])
     for obs_id, g in man.groupby("obs_id"):
         by_month = dict(zip(g["month_label"], g["chip_uri"], strict=False))
         # Date-order this obs's own months so the stack + its day-of-year vector align.
@@ -89,8 +84,8 @@ def embed_chips(
             (
                 obs_id,
                 int(r["block_id"]),
-                float(r["x_utm"]),
-                float(r["y_utm"]),
+                float(r["lon"]),
+                float(r["lat"]),
                 [MONTH_DOY[mo] for mo in present],
                 [by_month[mo] for mo in present],
             )
@@ -118,12 +113,10 @@ def embed_chips(
 
     obs_ids = np.array([r[0] for r in recs])
     block_ids = np.array([r[1] for r in recs])
-    xs = np.array([r[2] for r in recs])
-    ys = np.array([r[3] for r in recs])
-    # Point location → EPSG:4326 (lon/lat): one global CRS so the cube stays a valid
-    # point layer even as labels span multiple UTM zones. Chips are extracted in UTM
-    # 34S → reproject once; wall-to-wall maps get their CRS from the inference tile.
-    lon, lat = Transformer.from_crs(CHIP_CRS, "EPSG:4326", always_xy=True).transform(xs, ys)
+    # Point location is stored in the manifest as EPSG:4326 lon/lat (chips are extracted
+    # in each group's own native S2 UTM zone), so the cube is one global CRS directly.
+    lon = np.array([r[2] for r in recs], dtype="float64")
+    lat = np.array([r[3] for r in recs], dtype="float64")
     ds = xr.Dataset(
         {"emb": (("obs", "feat"), emb)},
         coords={

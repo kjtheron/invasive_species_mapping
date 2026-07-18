@@ -25,8 +25,8 @@ def _write_manifest(tmp_path: Path) -> str:
                     "species": sp,
                     "month_label": month,
                     "block_id": obs_id % 2,
-                    "x_utm": 230_000 + obs_id * 100,
-                    "y_utm": 6_240_000 + obs_id * 100,
+                    "lon": 25.0 + obs_id * 0.001,
+                    "lat": -30.0 - obs_id * 0.001,
                     "year": 2023,
                 }
             )

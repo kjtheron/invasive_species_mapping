@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import numpy as np
 from loguru import logger
+from rasterio.crs import CRS as RioCRS
+from rasterio.transform import array_bounds
+from rasterio.warp import Resampling, calculate_default_transform, reproject
 from shapely.geometry import box as shp_box
 
+from cmrv.aoi import SA_ALBERS, utm_epsg
 from cmrv.embeddings.base import MONTH_DOY
 from cmrv.embeddings.head import load_head, predict_probs
 from cmrv.embeddings.universat import UniverSatEmbedder
@@ -28,11 +32,6 @@ from cmrv.io import load_config, write_cog
 CHIP_PX = 64
 RESOLUTION_M = 10
 NODATA = 255
-
-
-def utm_epsg(lon: float, lat: float) -> int:
-    """UTM EPSG for a lon/lat — matches Sentinel-2's native MGRS zone (fallback)."""
-    return (32600 if lat >= 0 else 32700) + int((lon + 180) // 6) + 1
 
 
 def _composite_box(geom_wgs84, year, months_cfg, bands, cloud_cover_max):
@@ -87,6 +86,31 @@ def _d4_ops(n_views: int):
     return ops[: max(1, min(n_views, 8))]
 
 
+def _reproject_triplet(arr, src_transform, src_epsg: int, dst_crs: str):
+    """Warp a ``(3, H, W)`` uint8 class/conf/OOD stack from its native S2 UTM zone to
+    ``dst_crs`` (nearest-neighbour — the class band is categorical). Returns
+    ``(arr, transform, crs)``. Keeps embedding in the native zone; only the map is warped."""
+    src = RioCRS.from_epsg(src_epsg)
+    dst = RioCRS.from_user_input(dst_crs)
+    h, w = arr.shape[1], arr.shape[2]
+    bounds = array_bounds(h, w, src_transform)
+    dst_transform, dw, dh = calculate_default_transform(src, dst, w, h, *bounds)
+    out = np.full((arr.shape[0], dh, dw), NODATA, dtype=arr.dtype)
+    for b in range(arr.shape[0]):
+        reproject(
+            source=arr[b],
+            destination=out[b],
+            src_transform=src_transform,
+            src_crs=src,
+            dst_transform=dst_transform,
+            dst_crs=dst,
+            src_nodata=NODATA,
+            dst_nodata=NODATA,
+            resampling=Resampling.nearest,
+        )
+    return out, dst_transform, dst
+
+
 def _taper(n: int, ramp: int) -> np.ndarray:
     """2-D raised-cosine blend window: flat 1.0 centre, cosine ramp over ``ramp`` px/edge.
 
@@ -109,14 +133,16 @@ def infer_box(
     pipeline: str = "configs/pipeline.yaml",
     device: str = "cpu",
     tta_views: int = 1,
+    out_crs: str | None = SA_ALBERS,
 ):
-    """``(minlon, minlat, maxlon, maxlat)`` → writes a COG, returns ``(bands, transform, epsg)``.
+    """``(minlon, minlat, maxlon, maxlat)`` → writes a COG, returns ``(bands, transform, crs)``.
 
-    Bands are class_id / confidence / OOD. Always saves the COG to ``out_uri`` (set the
-    path to control where) and also returns the arrays + georef so a caller can mosaic
-    tiles. Overlapping 64 px windows (25%) blend with a constant-overlap-add taper to
-    remove the 640 m window seams. ``tta_views`` soft-averages augmented views per window
-    (1 = off, 4 = rotations, 8 = full D4), all in one batched forward — robust, ~N× slower.
+    Bands are class_id / confidence / OOD. The S2 composite + embedding run in the box's
+    **native** S2 UTM zone (no cross-zone resampling — same convention as training chips);
+    the output map is then warped to ``out_crs`` (default national :data:`SA_ALBERS`, so
+    tiles mosaic into one grid) — pass ``None`` to keep the native zone. Always saves the
+    COG to ``out_uri``. Overlapping 64 px windows (25%) blend with a constant-overlap-add
+    taper; ``tta_views`` soft-averages augmented views per window (1/4/8), one batched forward.
     """
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
@@ -173,13 +199,17 @@ def infer_box(
     ood_map = (np.clip(ood_acc / wsum, 0, 1) * 100).astype(np.uint8)
     out = np.stack([cls_map, conf_map, ood_map])
 
-    write_cog(out, transform, f"EPSG:{epsg}", out_uri, dtype="uint8", nodata=NODATA)
+    crs = f"EPSG:{epsg}"
+    if out_crs:  # warp native-zone map → national CRS so tiles mosaic into one grid
+        out, transform, dst = _reproject_triplet(out, transform, epsg, out_crs)
+        crs = dst.to_string()
+    write_cog(out, transform, crs, out_uri, dtype="uint8", nodata=NODATA)
     logger.success(
-        "wrote class/confidence/OOD COG ({}×{}, {} classes) @ EPSG:{} → {}",
-        h,
-        w,
+        "wrote class/confidence/OOD COG ({}×{}, {} classes) @ {} → {}",
+        out.shape[1],
+        out.shape[2],
         k,
-        epsg,
+        crs,
         out_uri,
     )
-    return out, transform, epsg
+    return out, transform, crs
