@@ -18,9 +18,30 @@ def test_lulc_alien_classes_map_to_genus() -> None:
     assert _lulc_to_taxon("Alien_Prosopis") == ("Prosopis", "genus")
 
 
-def test_lulc_native_kept_verbatim_as_functional() -> None:
-    assert _lulc_to_taxon("Fynbos-High density") == ("Fynbos-High density", "functional")
-    assert _lulc_to_taxon("Alien_Other") == ("Alien_Other", "functional")
+def test_lulc_native_and_transformed_map_to_landcover_members() -> None:
+    assert _lulc_to_taxon("Fynbos-High density") == ("fynbos", "biome")
+    assert _lulc_to_taxon("Renosterveld") == ("fynbos", "biome")
+    assert _lulc_to_taxon("Bushmanland Shrubland") == ("nama_karoo", "biome")
+    assert _lulc_to_taxon("Riparian Trees") == ("azonal", "biome")
+    assert _lulc_to_taxon("Irrigated Agriculture") == ("cultivated", "landcover")
+    assert _lulc_to_taxon("Rock") == ("bare", "landcover")
+
+
+def test_lulc_unmapped_classes_drop() -> None:
+    # shadow / transient / unspecific → no member, dropped at ingest
+    assert _lulc_to_taxon("Shade") == (None, "functional")
+    assert _lulc_to_taxon("Burnt") == (None, "functional")
+    assert _lulc_to_taxon("Alien_Other") == (None, "functional")
+
+
+def test_every_mapped_class_resolves_under_landcover() -> None:
+    """The requirement: every _LULC_TO_CLASS target is a real western_cape_landcover member."""
+    from cmrv.labels.classmap import build_lookup
+    from cmrv.labels.mapwaps import _LULC_TO_CLASS
+
+    cm = build_lookup("configs/labels_schema.yaml", "western_cape_landcover")
+    for lulc, (member, _rank) in _LULC_TO_CLASS.items():
+        assert cm.resolve(member) is not None, f"{lulc} → {member!r} resolves to no class"
 
 
 def test_density_zero_is_null_positive_is_cover() -> None:
@@ -64,17 +85,18 @@ def test_build_rows_resolves_under_genus_map() -> None:
         crs="EPSG:4326",
     )
     rows = _build_rows(gdf, "run1", dt.datetime(2026, 6, 24, tzinfo=dt.UTC))
-    cm = build_lookup("configs/labels_schema.yaml", "western_cape_iap_genus")
+    cm = build_lookup("configs/labels_schema.yaml", "western_cape_landcover")
 
     pine, water = rows
     assert pine["species_normalized"] == "Pinus"
-    assert cm.resolve(pine["species_normalized"]) is not None  # IAP → kept
+    assert cm.resolve(pine["species_normalized"]) is not None  # IAP genus → kept
     assert pine["cover_pct"] == 100.0
     assert pine["event_date"] == "2025-05-19"
-    assert water["taxon_rank"] == "functional"
+    assert water["species_normalized"] == "water"
+    assert water["taxon_rank"] == "landcover"
+    assert cm.resolve(water["species_normalized"]) is not None  # water → class 17
     assert water["cover_pct"] is None  # density 0 → NULL
     assert water["event_date"] is None  # sentinel dropped
-    assert cm.resolve(water["species_normalized"]) is None  # native → dropped at split
 
 
 def test_obs_id_from_geometry_not_parent_xy() -> None:

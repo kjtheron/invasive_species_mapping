@@ -169,9 +169,11 @@ def ingest_sanlc(
     pts = pts[pts["cls"].notna() & (pts["cls"] != "NATURAL")].reset_index(drop=True)
     logger.info("after VegMap biome join: {}", len(pts))
 
-    # exclude points whose 640 m chip would contain a known IAP field point
+    # exclude points whose 640 m chip would contain a known IAP field point.
+    # Only species/genus rows are IAP observations — MapWAPS also contributes native
+    # (biome) + transformed (landcover) points, which must NOT trigger exclusion.
     store = read_all(root)  # native GeoParquet → geometry already shapely
-    iap = store.loc[store["source"] != SOURCE, "geometry"].to_crs(UTM34S)
+    iap = store.loc[store["taxon_rank"].isin(("species", "genus")), "geometry"].to_crs(UTM34S)
     iap_buf = iap.buffer(iap_buffer_m).union_all()
     pts = pts[~pts.to_crs(UTM34S).geometry.within(iap_buf).to_numpy()].reset_index(drop=True)
     logger.info("after IAP exclusion ({} m): {}", iap_buffer_m, len(pts))
