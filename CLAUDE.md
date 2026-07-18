@@ -115,11 +115,14 @@ chips-stats            → species × spatial × temporal stats from the manifes
 make-split             → spatial-block train/val/test split + --class-map → class_id
 ```
 
-Downstream: `aoi-wc` / `aoi-tiles` (once), then `embed` (UniverSat cube) →
+Downstream: `aoi-wc` / `aoi-sa` / `aoi-tiles` (once), then `embed` (UniverSat cube) →
 `train-head` (linear/MLP + `--save`) → `infer` (wall-to-wall triplet COG).
 Compositing is inline — `ingest-chips` (training windows) and `infer` (inference
 boxes) each build their own S2 composite; there is no separate composite-to-disk
-step. Months for the chip stack are **Feb/May/Sep** (WC phenology — see `pipeline.yaml`).
+step. Chip-stack months are **region-aware** (`pipeline.yaml` `months_by_zone`):
+winter-rainfall WC = Feb/May/Sep, summer-rainfall KZN/EC = Feb/Jun/Sep; each label
+picks its set from its province (`admin1_zone`). The **training** AOI is national SA
+(`aoi-sa`, so KZN/EC labels aren't clipped); **inference** stays WC (`aoi-wc`).
 
 ## Common tripwires
 

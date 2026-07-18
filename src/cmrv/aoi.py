@@ -68,40 +68,48 @@ def _n_vertices(geom) -> int:
     return len(get_coordinates(geom))
 
 
-def fetch_western_cape(
+def fetch_provinces(
+    provinces: list[str] | None = None,
     source: str | Path | None = None,
     buffer_m: float = WC_BUFFER_M,
     simplify_m: float = 100.0,
     out_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
-    """Western Cape province polygon from GeoBoundaries gbOpen ADM1 (or a local ``source``).
+    """Dissolve one or more SA provinces (GeoBoundaries gbOpen ADM1) into one AOI polygon.
 
-    Cleans the raw boundary: make-valid, drop the sub-Antarctic Prince Edward
-    Islands (admin'd to WC but ~2000 km offshore), simplify vertices
-    (``simplify_m`` metres, in UTM 34S), dissolve, then a +``buffer_m`` buffer.
-    Returns one feature in ``out_crs``.
+    ``provinces=None`` → **all** provinces (national South Africa). Cleans the raw
+    boundary: make-valid, drop the sub-Antarctic Prince Edward Islands (~2000 km
+    offshore), simplify vertices (``simplify_m`` metres, in UTM 34S), dissolve, then a
+    +``buffer_m`` buffer. Returns one feature in ``out_crs``.
     """
     gdf = gpd.read_file(source) if source else fetch_geoboundaries_adm1()
     name_col = "shapeName" if "shapeName" in gdf.columns else "PROVINCE"
-    match = gdf[name_col].astype(str).str.strip().str.lower() == WC_PROVINCE_NAME.lower()
-    wc = gdf[match]
-    if wc.empty:
-        raise ValueError(
-            f"no {WC_PROVINCE_NAME!r} in column {name_col!r}; "
-            f"saw {sorted(gdf[name_col].astype(str).unique())}"
-        )
-    wc = wc.set_crs("EPSG:4326") if wc.crs is None else wc.to_crs("EPSG:4326")
+    norm = gdf[name_col].astype(str).str.strip().str.lower()
+    if provinces:
+        wanted = {p.strip().lower() for p in provinces}
+        sel = gdf[norm.isin(wanted)]
+        missing = wanted - set(norm)
+        if missing:
+            raise ValueError(
+                f"provinces {sorted(missing)} not in column {name_col!r}; "
+                f"saw {sorted(gdf[name_col].astype(str).unique())}"
+            )
+        label = provinces[0] if len(provinces) == 1 else f"{len(provinces)} provinces"
+    else:
+        sel = gdf
+        label = "South Africa"
+    sel = sel.set_crs("EPSG:4326") if sel.crs is None else sel.to_crs("EPSG:4326")
 
     # --- clean vertices ---
-    parts = wc.explode(index_parts=False, ignore_index=True)
+    parts = sel.explode(index_parts=False, ignore_index=True)
     parts["geometry"] = parts.geometry.apply(make_valid)
     n_parts = len(parts)
     parts = parts[parts.geometry.representative_point().y > MAINLAND_MIN_LAT]
     if len(parts) < n_parts:
         logger.info("dropped {} far-offshore part(s) (Prince Edward Is.)", n_parts - len(parts))
 
-    wc_m = parts.to_crs("EPSG:32734")
-    dissolved = make_valid(unary_union(wc_m.geometry))
+    sel_m = parts.to_crs("EPSG:32734")
+    dissolved = make_valid(unary_union(sel_m.geometry))
     nv_before = _n_vertices(dissolved)
     if simplify_m > 0:
         dissolved = make_valid(dissolved.simplify(simplify_m, preserve_topology=True))
@@ -109,7 +117,8 @@ def fetch_western_cape(
 
     area_km2 = gpd.GeoSeries([buffered], crs="EPSG:32734").area.iloc[0] / 1e6
     logger.info(
-        "Western Cape: vertices {} → {} (simplify {} m), area {:.0f} km^2, buffer {:.0f} m",
+        "{}: vertices {} → {} (simplify {} m), area {:.0f} km^2, buffer {:.0f} m",
+        label,
         nv_before,
         _n_vertices(buffered),
         simplify_m,
@@ -117,10 +126,20 @@ def fetch_western_cape(
         buffer_m,
     )
     return gpd.GeoDataFrame(
-        {"name": [WC_PROVINCE_NAME], "admin1_iso": ["ZA-WC"]},
-        geometry=[buffered],
-        crs="EPSG:32734",
+        {"name": [label]}, geometry=[buffered], crs="EPSG:32734"
     ).to_crs(out_crs)
+
+
+def fetch_western_cape(
+    source: str | Path | None = None,
+    buffer_m: float = WC_BUFFER_M,
+    simplify_m: float = 100.0,
+    out_crs: str = "EPSG:4326",
+) -> gpd.GeoDataFrame:
+    """Western Cape province polygon — thin wrapper over :func:`fetch_provinces`."""
+    return fetch_provinces(
+        [WC_PROVINCE_NAME], source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=out_crs
+    )
 
 
 def build_tile_grid(
