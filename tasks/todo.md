@@ -63,13 +63,14 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 ## Deferred (designed, not built)
 
 - [x] **Region-aware months per province** — DONE. `pipeline.yaml` `months_by_zone`
-  (winter_rainfall feb/may/sep; summer_rainfall feb/jun/sep) + `admin1_zone`; `ingest-chips`
+  (winter_rainfall feb/may/sep; summer_rainfall **jul/sep/dec**) + `admin1_zone`; `ingest-chips`
   tags each label's zone from its province and composites per-zone; `embed` reads each obs's
-  own months from the manifest (per-obs day-of-year, `MONTH_DOY` += jun). AOI expanded to
-  national SA (`aoi-sa`, `fetch_provinces`) so KZN/EC labels aren't clipped. *Refinement
-  deferred:* the summer months are first-cut — validate against summer-rainfall IAP phenology
-  literature (like the WC set was), and consider a true rainfall-seasonality-zone layer
-  (Schulze) instead of province mapping where a province is mixed (EC south coast).
+  own months from the manifest (per-obs day-of-year). Summer months from Masemola et al. 2020
+  (IJAEOG 93): dry-winter senescence / Acacia flowering / peak summer growth, >80% each. AOI
+  expanded to national SA (`aoi-sa`, `fetch_provinces`) so KZN/EC labels aren't clipped; tile+
+  block grids in **SA Albers equal-area** (`cmrv.aoi.SA_ALBERS`), not UTM 34S. *Deferred:* a
+  true rainfall-seasonality-zone layer (Schulze) where a province is mixed (EC south coast);
+  per-zone UTM for the chip pixel grid (chips still extract in EPSG:32734).
 - [ ] **Cover gate** — flip `load_training_labels(min_cover_pct≈60)` on once enough cover-bearing data exists
 - [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
 - [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)

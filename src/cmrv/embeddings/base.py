@@ -16,8 +16,8 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 # Mid-month day-of-year for every configured month across zones (pipeline.yaml
-# months_by_zone): winter-rainfall feb/may/sep, summer-rainfall feb/jun/sep.
-MONTH_DOY: dict[str, int] = {"feb": 46, "may": 135, "jun": 166, "sep": 258}
+# months_by_zone): winter-rainfall feb/may/sep, summer-rainfall jul/sep/dec.
+MONTH_DOY: dict[str, int] = {"feb": 46, "may": 135, "jul": 196, "sep": 258, "dec": 349}
 
 
 class Embedder(ABC):

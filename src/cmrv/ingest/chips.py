@@ -73,6 +73,7 @@ from rasterio.windows import transform as window_transform
 from shapely.geometry import box
 from shapely.ops import unary_union
 
+from cmrv.aoi import SA_ALBERS
 from cmrv.ingest.cloud_mask import apply_scl_mask
 from cmrv.ingest.composite import _transform_from_da, monthly_median
 from cmrv.io import ensure_parent, read_parquet_df, write_parquet_df
@@ -103,7 +104,7 @@ COLLECTION = "sentinel-2-l2a"
 def build_spatial_blocks(
     aoi: gpd.GeoDataFrame,
     block_km: float = BLOCK_KM,
-    crs: str = "EPSG:32734",
+    crs: str = SA_ALBERS,
     min_overlap_frac: float = 0.001,
 ) -> gpd.GeoDataFrame:
     """Create a coarse grid of spatial blocks over the AOI.
