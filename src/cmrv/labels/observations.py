@@ -27,7 +27,13 @@ from cmrv.io import ensure_parent, list_parquet_files, write_parquet_df
 PROCESSED_ROOT = "data/labels/processed"
 # One partition directory per source dataset (mirrors data/labels/raw/<dataset>/).
 KNOWN_DATASETS = frozenset(
-    {"BioSCape_VegPlots_Berg_Eerste_2425", "mapwaps_olifants_doring", "sanlc_accuracy_points"}
+    {
+        "BioSCape_VegPlots_Berg_Eerste_2425",
+        "mapwaps_olifants_doring",
+        "mapwaps_tugela",
+        "mapwaps_umzimvubu",
+        "sanlc_accuracy_points",
+    }
 )
 
 # Canonical column order for all partitions

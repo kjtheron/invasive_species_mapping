@@ -169,8 +169,8 @@ class_maps:
       genus_fallback: true
       genus: prosopis
     5:
-      name: iap_riparian
-      members: ["Leptospermum laevigatum", "Populus canescens", "Populus alba", "Sesbania punicea"]
+      name: iap_riparian            # Populus split out to its own class (21) once data-rich
+      members: ["Leptospermum laevigatum", "Sesbania punicea"]
     # --- native biomes (VegMap T_BIOME) ---
     6:  {name: fynbos,          members: ["fynbos"]}
     7:  {name: succulent_karoo, members: ["succulent_karoo"]}
@@ -186,3 +186,11 @@ class_maps:
     16: {name: bare,            members: ["bare"]}
     17: {name: water,           members: ["water"]}
     18: {name: wetland,         members: ["wetland"]}
+    # --- added for multi-catchment SA coverage (WC Renosterveld; KZN/EC summer-rainfall) ---
+    19: {name: renosterveld,    members: ["renosterveld"]}   # own class (was folded into fynbos)
+    20: {name: savanna,         members: ["savanna"]}        # native woody: MapWAPS Indigenous Bush_*
+    21:
+      name: populus_spp                                      # Alien_Poplar (Populus × canescens)
+      members: ["Populus canescens", "Populus alba"]
+      genus_fallback: true
+      genus: populus
