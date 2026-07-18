@@ -15,10 +15,10 @@ Decisions baked in (see the Training-dataset metadata PDF):
 - **taxon_rank = genus** for the Alien_* IAP classes (Pine/Gum/Wattle/Prosopis) —
   the survey did not resolve them to species. Species-level resolution is left to
   a hierarchical-loss head later; for now ``make-split`` uses a genus class map.
-- **Default ``iap_only`` keeps the four named IAP genera** (Alien_Pine/Gum/Wattle/
-  Prosopis); native / land-cover rows and the unspecific ``Alien_Other`` are dropped
-  at ingest. ``iap_only=False`` stores all 23 classes (the extra rows resolve to no
-  IAP class and are dropped at ``make-split``).
+- **All mappable classes ingested.** ``_LULC_TO_CLASS`` crosswalks each of the 23
+  MapWAPS classes to a ``western_cape_landcover`` member (IAP genus, VegMap biome,
+  or transformed land cover) — the same strings SANLC emits, so make-split resolves
+  them. Only Shade / Burnt / Alien_Other are dropped (shadow / transient / unspecific).
 """
 
 from __future__ import annotations
@@ -47,25 +47,42 @@ LICENSE = "CC-BY-4.0 / CC-BY-SA (ambiguous); co-authorship offer expected for ac
 # ~10 m S2-pixel residual. ponytail: constant, refine if a per-point figure surfaces.
 COORD_UNCERTAINTY_M = 15.0
 
-# Alien LULC class → (species_normalized, taxon_rank). Genus-level only.
-_ALIEN_LULC: dict[str, tuple[str, str]] = {
+# MapWAPS LULC_Class → (species_normalized, taxon_rank) for the
+# ``western_cape_landcover`` map. Alien_* → IAP genus; native veg → VegMap-biome
+# member; transformed → land-cover member — the SAME strings SANLC emits, so
+# make-split's class_map resolves them (genus fallback for Alien_*, binomial match
+# for the rest). Classes NOT listed are dropped at ingest: "Shade" (terrain/cloud
+# shadow), "Burnt" (transient post-fire scar), "Alien_Other" (unspecific alien).
+_LULC_TO_CLASS: dict[str, tuple[str, str]] = {
+    # IAP genera (survey didn't resolve to species)
     "Alien_Pine": ("Pinus", "genus"),
     "Alien_Gum": ("Eucalyptus", "genus"),
     "Alien_Wattle": ("Acacia", "genus"),
     "Alien_Prosopis": ("Prosopis", "genus"),
+    # native biomes (→ VegMap T_BIOME member strings)
+    "Fynbos-High density": ("fynbos", "biome"),
+    "Fynbos - Low density": ("fynbos", "biome"),
+    "Renosterveld": ("fynbos", "biome"),  # Renosterveld ⊂ Fynbos biome
+    "Succulent Karoo": ("succulent_karoo", "biome"),
+    "Bushmanland Shrubland": ("nama_karoo", "biome"),  # Bushmanland bioregion ⊂ Nama-Karoo
+    "Riparian Bush": ("azonal", "biome"),  # riparian = azonal (intrazonal) vegetation
+    "Riparian Trees": ("azonal", "biome"),
+    # transformed / land cover
+    "Irrigated Agriculture": ("cultivated", "landcover"),
+    "Dryland Agriculture": ("cultivated", "landcover"),
+    "Urban": ("built_up", "landcover"),
+    "Bare Ground": ("bare", "landcover"),
+    "Rock": ("bare", "landcover"),
+    "Water": ("water", "landcover"),
+    "Wetland - Reed": ("wetland", "landcover"),
+    "Wetland_Other": ("wetland", "landcover"),
+    "Wetland - Palmiet": ("wetland", "landcover"),
 }
 
 
 def _lulc_to_taxon(lulc: str) -> tuple[str | None, str]:
-    """LULC_Class → (species_normalized, taxon_rank).
-
-    Alien IAP classes map to their genus; every other class (native, land-cover,
-    ``Alien_Other``) keeps the LULC label verbatim with rank ``functional`` so it
-    survives in the store but resolves to no IAP class at make-split.
-    """
-    if lulc in _ALIEN_LULC:
-        return _ALIEN_LULC[lulc]
-    return (lulc or None), "functional"
+    """LULC_Class → (species_normalized, taxon_rank); ``(None, "functional")`` if unmapped."""
+    return _LULC_TO_CLASS.get(lulc, (None, "functional"))
 
 
 def _density_to_cover(d: object) -> float | None:
@@ -132,15 +149,13 @@ def ingest_mapwaps(
     shp_path: str | Path = SHP_PATH,
     root: str = PROCESSED_ROOT,
     run_id: str | None = None,
-    iap_only: bool = True,
 ) -> str:
     """Ingest MapWAPS Olifants-Doring training points → unified store (``source=mapwaps``).
 
-    ``iap_only`` (default): keep only the four **named** IAP genus classes
-    (Alien_Pine/Gum/Wattle/Prosopis); native / land-cover rows *and* the unspecific
-    ``Alien_Other`` class are dropped at ingest — native vegetation comes from
-    SANLC/VegMap, and ``Alien_Other`` resolves to no genus. Pass ``iap_only=False``
-    to ingest all 23 classes. Geometry used as-is (already corrected), reprojected to 4326.
+    Every class in ``_LULC_TO_CLASS`` is kept and crosswalked to a
+    ``western_cape_landcover`` member — IAP genera (Alien_*), native biomes, and
+    transformed land cover. Rows outside it (Shade / Burnt / Alien_Other) are dropped
+    at ingest. Geometry used as-is (already corrected), reprojected to 4326.
     """
     run_id = run_id or make_run_id(SOURCE)
     ingested_at = dt.datetime.now(tz=dt.UTC)
@@ -149,10 +164,9 @@ def ingest_mapwaps(
     logger.info("MapWAPS rows: {} (CRS {})", len(gdf), gdf.crs)
     gdf = gdf.to_crs("EPSG:4326")
 
-    if iap_only:
-        n0 = len(gdf)
-        gdf = gdf[gdf["LULC_Class"].astype(str).isin(_ALIEN_LULC)].reset_index(drop=True)
-        logger.info("iap_only: kept {} of {} rows (named IAP genera)", len(gdf), n0)
+    n0 = len(gdf)
+    gdf = gdf[gdf["LULC_Class"].astype(str).isin(_LULC_TO_CLASS)].reset_index(drop=True)
+    logger.info("kept {} of {} rows (dropped Shade/Burnt/Alien_Other)", len(gdf), n0)
 
     # Single field campaign → fill undated points with the modal observation date
     # so per-label year alignment (event_date.year) holds for all of them.
