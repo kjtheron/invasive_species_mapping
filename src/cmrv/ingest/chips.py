@@ -312,6 +312,8 @@ def _stack_items(
     epsg: int = 32734,
 ) -> xr.DataArray:
     """Build lazy masked composite from a list of signed STAC items."""
+    # ponytail: chunk near the 64 px chip size, not 1024 — we only slice small windows,
+    # so a 1024² chunk read ~16× more per window and blew RAM with concurrent workers.
     da = stackstac.stack(
         items,
         assets=bands + ["SCL"],
@@ -319,7 +321,7 @@ def _stack_items(
         epsg=epsg,
         bounds_latlon=geom_wgs84.bounds,
         rescale=False,
-        chunksize=1024,
+        chunksize=256,
     )
     return apply_scl_mask(da).astype("float32")
 
