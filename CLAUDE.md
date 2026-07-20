@@ -126,6 +126,35 @@ picks its set from its province (`admin1_zone`). The **training** AOI is nationa
 (`aoi.infer_path`). Both are read from `pipeline.yaml` by the CLI — don't hardcode an
 AOI path in a verb default.
 
+## Adding a new label source (do these in order)
+
+Chipping is expensive, so everything that changes *what* gets chipped must be
+settled **before** `ingest-chips` runs. The pipeline now fails loudly rather than
+guessing, but the cheapest place to catch these is still here.
+
+1. **Province → zone.** Add every province the source touches to `admin1_zone` in
+   [configs/pipeline.yaml](configs/pipeline.yaml). Unlisted provinces **raise** —
+   they used to default to `winter_rainfall`, which silently chips a
+   summer-rainfall label on the Western Cape calendar. Currently mapped: WC, KZN,
+   EC, Limpopo, Mpumalanga. **Not** mapped: Northern Cape, North West, Free
+   State, Gauteng.
+2. **New genera → `members[]`.** Add any new genus to the relevant class in
+   [configs/labels_schema.yaml](configs/labels_schema.yaml). A new *species* in an
+   existing genus is free (`genus_fallback`); a new *genus* (Solanum, Lantana,
+   Melia…) chips fine and is then silently dropped at `make-split`. Appending a
+   class id is safe; promoting a species out of a `genus_fallback` class changes
+   existing `class_id`s and invalidates saved head checkpoints.
+3. **Set `aoi_admin1` in the adapter.** It's assigned per adapter/catchment, not
+   derived from geometry — a wrong value silently picks the wrong month set.
+4. **Ingest, then inspect** — `labels-<source>-ingest`, then `cmrv labels` to
+   confirm the province/species split looks right.
+5. **`ingest-chips`** — incremental; only new obs are fetched.
+6. **`make-split`** — read the unmapped-species warning; it lists what step 2 missed.
+
+Regrouping is safe: an obs whose zone changes has its now-stale months pruned and
+only the genuinely missing ones re-fetched (months common to both calendars, e.g.
+`sep`, are kept). Re-running with no changes is a no-op.
+
 ## Common tripwires
 
 - **CRS drift.** Three grids, three CRSs, none interchangeable: vector labels in WGS84; **tile/block grids in SA Albers** (`cmrv.aoi.SA_ALBERS` — equal-area, true-square country-wide, so never build them in WGS84 *or* UTM, which skews outside zone 34S); **chip/composite rasters in each image's native S2 UTM zone** (`utm_epsg` per group — no cross-zone resampling), with inference output warped to SA Albers so tiles mosaic. Always declare CRS; convert via `rioxarray.reproject_match`.

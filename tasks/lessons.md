@@ -100,6 +100,35 @@ which was inflating per-source counts by 1 and injecting a geometry-less phantom
 
 ---
 
+## 2026-07-20 — An idempotence check must compare identity, not count
+
+**Mistake:** The incremental skip test was `n_distinct_months >= len(months_cfg)` —
+it counted chipped months without checking *which*. An obs chipped feb/may/sep under
+the winter calendar therefore satisfied a summer-rainfall calendar of jul/sep/dec, so
+correcting a label's rainfall zone could never re-chip it. Demonstrated end to end: the
+re-run logged "all labels already fully chipped — nothing to do" and `jul`/`dec` were
+never fetched. Training would then use Western Cape phenology for a KZN label, with the
+pipeline reporting success every time. The same shape of bug as `admin1_zone` silently
+`.fillna("winter_rainfall")`-ing an unlisted province.
+
+**Rule:** A "already done" predicate must compare the *identity* of what was produced
+against what is currently expected, never a tally. Here: `expected_months[obs] <= chipped_months[obs]`,
+where `expected_months` comes from the obs's current zone. And never default a
+config lookup that changes what data gets fetched — raise and name the missing keys.
+
+**How to apply:** `_reconcile_manifest` takes `expected_months` and prunes chips whose
+month is no longer expected, so a regroup deletes the stale calendar's chips, keeps
+months common to both (`sep`), and re-fetches only the genuine difference. `ingest-chips`
+raises on a province missing from `admin1_zone`, listing it. Both are pinned by tests
+that were verified to fail against the old behaviour.
+
+**Why this matters:** Cheap-looking idempotence checks decide whether expensive work
+re-runs. A count-based one is indistinguishable from a correct one until the day the
+expected *set* changes — and then it fails silently, in the direction of "do nothing",
+which looks exactly like success.
+
+---
+
 ## 2026-07-20 — Size the work unit by cost, not by geography
 
 **Mistake:** `ingest-chips` OOM-killed twice (7.0 GB, then 9.2 GB RSS on a 15 GB box),

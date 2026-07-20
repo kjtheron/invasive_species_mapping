@@ -1204,19 +1204,39 @@ def _reconcile_manifest(
     manifest: pd.DataFrame,
     keep_obs: set[str],
     manifest_uri: str,
+    expected_months: dict[str, set[str]] | None = None,
 ) -> pd.DataFrame:
-    """Prune chips for obs outside the current thinned set, then rewrite manifest.
+    """Prune chips outside the current thinned set / month set, then rewrite manifest.
 
-    ``ingest-chips`` is additive: a re-thinning that drops an obs (because a
-    label-store change picked a different one-per-cell representative) leaves the
-    old obs's chips behind, so the manifest becomes a superset of the canonical
-    one-rep-per-cell set. This deletes those stale chip files + their now-empty
-    obs dirs and rewrites the manifest to equal the canonical set. Disk-only — no
-    re-download. ponytail: O(n) manifest scan, fine at chip-set scale.
+    ``ingest-chips`` is additive, so two kinds of cruft accumulate:
+
+    * **Dropped obs** — a re-thinning picked a different one-per-cell
+      representative, leaving the old obs's chips behind.
+    * **Regrouped obs** — a label moved to a different rainfall zone (or the
+      zone's month set changed), so chips from the old calendar are stale.
+      ``expected_months`` maps obs_id → the month labels it should now have;
+      anything else is pruned. The obs keeps any month common to both calendars
+      (e.g. ``sep``), so a regroup re-fetches only what actually differs.
+
+    Deletes the stale chip files + their now-empty obs dirs and rewrites the
+    manifest to match. Disk-only — no re-download.
+    ponytail: O(n) manifest scan, fine at chip-set scale.
     """
     if manifest.empty:
         return manifest
-    stale = manifest[~manifest["obs_id"].isin(keep_obs)]
+    is_stale = ~manifest["obs_id"].isin(keep_obs)
+    if expected_months:
+        # An obs absent from expected_months isn't being managed by this call
+        # (e.g. a --species subset) — leave its months alone, `keep_obs` decides.
+        wrong_month = pd.Series(
+            [
+                m not in expected_months.get(o, {m})
+                for o, m in zip(manifest["obs_id"], manifest["month_label"], strict=True)
+            ],
+            index=manifest.index,
+        )
+        is_stale = is_stale | wrong_month
+    stale = manifest[is_stale]
     if stale.empty:
         return manifest
     for uri in stale["chip_uri"]:
@@ -1224,7 +1244,7 @@ def _reconcile_manifest(
     for d in {Path(u).parent for u in stale["chip_uri"]}:
         if d.exists() and not any(d.iterdir()):
             d.rmdir()
-    kept = manifest[manifest["obs_id"].isin(keep_obs)].reset_index(drop=True)
+    kept = manifest[~is_stale].reset_index(drop=True)
     write_parquet_df(kept, manifest_uri)
     logger.success(
         "reconcile: pruned {} stale chips ({} obs) → {} chips ({} obs) in the thinned set",
@@ -1297,6 +1317,17 @@ def extract_training_chips(
     # end to prune chips for obs a re-thinning has since dropped (additive cruft).
     canonical_obs = set(labels["obs_id"])
 
+    # The month set each obs *should* have, from its zone. Drives both the
+    # incremental skip test and the prune of chips left behind by a regrouping.
+    _base_months = {m["label"] for m in months_cfg}
+    _zone_months = {
+        z: {m["label"] for m in ms} for z, ms in (months_by_zone or {}).items()
+    }
+    expected_months: dict[str, set[str]] = {
+        oid: _zone_months.get(z, _base_months)
+        for oid, z in zip(labels["obs_id"], labels["_zone"], strict=True)
+    }
+
     # Recover any leftover shards from a prior crashed run before building the
     # incremental skip set — that way partial-month obs_ids from a prior run
     # are correctly seen as partially-done rather than fully-skipped.
@@ -1342,29 +1373,46 @@ def extract_training_chips(
         chipped_months: set[tuple[str, str]] = set(
             zip(existing_manifest["obs_id"], existing_manifest["month_label"], strict=True)
         )
+        # "Fully chipped" compares WHICH months, not how many. A count-only test
+        # ("has 3 of 3") silently accepts an obs chipped feb/may/sep against a
+        # summer-rainfall calendar of jul/sep/dec — so regrouping a label to a
+        # different zone would never re-chip it. Subset test → a zone change
+        # re-fetches exactly the missing months and nothing else.
+        got = existing_manifest.groupby("obs_id")["month_label"].agg(set)
         fully_chipped = {
-            oid
-            for oid, cnt in existing_manifest.groupby("obs_id")["month_label"].nunique().items()
-            if cnt >= len(months_cfg)
+            oid for oid, months in got.items() if expected_months.get(oid, set()) <= months
         }
+        n_regrouped = sum(
+            1
+            for oid, months in got.items()
+            if oid in expected_months and not expected_months[oid] <= months
+        )
         n_before = len(labels)
         labels = labels[~labels["obs_id"].isin(fully_chipped)]
         partial_ids = {r[0] for r in chipped_months} - fully_chipped
         n_partial = labels["obs_id"].isin(partial_ids).sum()
         logger.info(
             "incremental: {} labels fully chipped, {} labels to process "
-            "({} have partial months to retry)",
+            "({} have partial/regrouped months to fetch)",
             n_before - len(labels),
             len(labels),
             n_partial,
         )
+        if n_regrouped:
+            logger.info(
+                "regrouped: {} obs have chips outside their zone's month set — "
+                "missing months will be fetched, stale ones pruned",
+                n_regrouped,
+            )
     else:
         chipped_months = set()
 
     if labels.empty:
         logger.success("all labels already fully chipped — nothing to do")
         if year_fallback and reconcile:  # top-level: reconcile away thinned-out cruft
-            existing_manifest = _reconcile_manifest(existing_manifest, canonical_obs, manifest_uri)
+            existing_manifest = _reconcile_manifest(
+                existing_manifest, canonical_obs, manifest_uri, expected_months
+            )
         return existing_manifest
 
     # Track obs_ids attempted in this pass — used for the Y-1 fallback below.
@@ -1478,6 +1526,8 @@ def extract_training_chips(
     # Skipped when the caller chipped a SUBSET (--species): canonical_obs is then
     # only that subset, so reconciling would delete every other species' chips.
     if year_fallback and reconcile:
-        manifest_df = _reconcile_manifest(manifest_df, canonical_obs, manifest_uri)
+        manifest_df = _reconcile_manifest(
+            manifest_df, canonical_obs, manifest_uri, expected_months
+        )
 
     return manifest_df
