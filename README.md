@@ -47,11 +47,9 @@ The model learns from **field surveys that measure cover or density**, not from 
 
 Sources disagree on how precisely they name things: MapWAPS records "Alien Wattle", BioSCape records *Acacia mearnsii*. Every observation therefore carries its taxonomic rank, and the model trains at genus level, where the sources agree.
 
-Labels are chipped **nationally** so KZN and Eastern Cape survey data isn't thrown away, while the delivered map currently covers the Western Cape.
-
 ## Repository layout
 
-Data artifacts live under `data/` (not committed):
+Data artifacts live under `data/`:
 
 | Path | Contents |
 |---|---|
@@ -61,7 +59,7 @@ Data artifacts live under `data/` (not committed):
 | `data/embeddings/` | Embedding cubes (Zarr) |
 | `data/outputs/` | Output maps and reports |
 
-Vector data is GeoParquet, rasters are COGs, arrays are Zarr — no shapefiles, no CSVs in the pipeline.
+Vector data is GeoParquet, rasters are COGs, arrays are Zarr.
 
 ## Getting started
 
