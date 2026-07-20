@@ -128,7 +128,7 @@ AOI path in a verb default.
 
 ## Common tripwires
 
-- **CRS drift.** Vector labels in WGS84, rasters in UTM 34S (EPSG:32734), embeddings in pixel coords. Always declare CRS; convert via `rioxarray.reproject_match`. Tile/block grids are built in UTM, never WGS84.
+- **CRS drift.** Three grids, three CRSs, none interchangeable: vector labels in WGS84; **tile/block grids in SA Albers** (`cmrv.aoi.SA_ALBERS` — equal-area, true-square country-wide, so never build them in WGS84 *or* UTM, which skews outside zone 34S); **chip/composite rasters in each image's native S2 UTM zone** (`utm_epsg` per group — no cross-zone resampling), with inference output warped to SA Albers so tiles mosaic. Always declare CRS; convert via `rioxarray.reproject_match`.
 - **Output grid.** UniverSat ingests native 10 m chips; `output_grid` sets the dense token resolution, decoupled from input. Center-token embedding for point labels; full dense grid for wall-to-wall inference.
 - **Month availability.** Some tiles have 0 valid scenes in a month — pass a `month_mask` so the temporal head ignores missing months; don't drop the tile.
 - **Label leakage.** Build spatial-block splits *before* training; never train on a block overlapping a held-out one.
