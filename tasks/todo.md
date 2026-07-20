@@ -39,10 +39,20 @@ under the IAP-only maps, "not-IAP" is an OOD/threshold call instead.
 1. **Re-chip the full store** — chips wiped 2026-07-20 (class scope changed to
    IAP + non-IAP nationally). ~19.3k thinned labels × 3 months; expect a long run.
    Then re-split on `sa_landcover` and retrain.
-2. **Wall-to-wall inference** (Stage 7, issue #3): tile → 3-month composite → dense
+2. **⚠️ RE-RUN `ingest-chips` ONCE THE 2026-07-20 RUN FINISHES — to backfill
+   skipped months.** That run was started *before* the SAS-refresh fix, so any
+   month whose retries were exhausted mid-run was logged
+   `all attempts failed — skipping month` and left out of the manifest. The
+   re-run is cheap and safe: it's incremental, so it fetches **only** the missing
+   months, and the fix means they should now succeed. Count what was lost with:
+   ```bash
+   grep -c "all attempts failed — skipping month" data/chips_run.log
+   ```
+   Then just `uv run cmrv ingest-chips --max-workers 15` again (no flags, no wipe).
+3. **Wall-to-wall inference** (Stage 7, issue #3): tile → 3-month composite → dense
    UniverSat token grid → frozen head → class + uncertainty + Mahalanobis OOD →
    triplet COGs in `data/outputs/` → viewer.
-3. **More training data — the biggest accuracy lever.** The set is small + imbalanced
+4. **More training data — the biggest accuracy lever.** The set is small + imbalanced
    (rare classes have 1–4 test samples). BioSCape cover-bearing data is embargoed until
    **~Oct 2026**; source interim cover-bearing datasets meanwhile. Iterating
    loss/architecture won't move the needle — data will.

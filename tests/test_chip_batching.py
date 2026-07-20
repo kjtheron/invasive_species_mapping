@@ -71,3 +71,50 @@ def test_scene_cap(monkeypatch, max_scenes, expected):
         max_scenes=max_scenes,
     )
     assert [i.properties["eo:cloud_cover"] for i in kept] == expected
+
+
+# --- SAS token refresh -------------------------------------------------------
+
+
+def _signed_item(token: str):
+    """A pystac Item whose asset href already carries a SAS token."""
+    import pystac
+
+    item = pystac.Item("i", None, None, __import__("datetime").datetime(2023, 2, 1), {})
+    item.assets["B02"] = pystac.Asset(
+        href=f"https://x.blob.core.windows.net/c/b.tif?st=2026-01-01T00%3A00%3A00Z&se=2026-01-02T00%3A00%3A00Z&sp=rl&sig={token}"
+    )
+    return item
+
+
+def test_resign_replaces_an_expired_token(monkeypatch):
+    """The bug: sign_url short-circuits on an already-signed href, so without the
+    strip the stale token survives and reads fail once it expires."""
+    import datetime as dt
+
+    from planetary_computer.sas import SASToken
+
+    fresh = SASToken(
+        token="sig=NEW", expiry=dt.datetime(2099, 1, 1, tzinfo=dt.UTC)
+    )
+    monkeypatch.setattr("planetary_computer.sas.get_token", lambda *a, **k: fresh)
+
+    from cmrv.ingest.chips import _resign
+
+    item = _signed_item("OLD")
+    _resign([item])
+    href = item.assets["B02"].href
+    assert "OLD" not in href, "stale token survived — strip-before-sign is broken"
+    assert "NEW" in href
+
+
+def test_resign_leaves_local_fallback_hrefs_alone():
+    """The download fallback rewrites hrefs to local paths — signing must no-op."""
+    import pystac
+
+    from cmrv.ingest.chips import _resign
+
+    item = pystac.Item("i", None, None, __import__("datetime").datetime(2023, 2, 1), {})
+    item.assets["B02"] = pystac.Asset(href="/tmp/s2dl_x/scene_B02.tif")
+    _resign([item])
+    assert item.assets["B02"].href == "/tmp/s2dl_x/scene_B02.tif"

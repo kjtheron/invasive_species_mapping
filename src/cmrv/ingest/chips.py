@@ -478,6 +478,24 @@ def _window_medians(
     return results  # type: ignore[return-value]  # every slot is filled above
 
 
+def _resign(items: list) -> None:
+    """Refresh every item's SAS token in place, just before the hrefs get read.
+
+    MPC tokens live ~45 min and a single :func:`_batched_window_medians` call can
+    outlive that across its sub-cells — so signing once per retry attempt lets the
+    later cells read with an href that expired mid-attempt, which surfaces as
+    ``RasterioIOError`` and, once retries are spent, a silently skipped month.
+    Signing per cell closes that window. ``get_token`` serves from cache until
+    under 60 s remain, so this is a dict lookup in the common case.
+
+    No-op for the local-download fallback: those hrefs aren't blob URLs, so both
+    the strip and the sign leave them alone.
+    """
+    for item in items:
+        _strip_sas_inplace(item)  # sign_url short-circuits on an already-signed href
+        pc.sign_inplace(item)
+
+
 def _batched_window_medians(
     items: list,
     points_utm: list[tuple[float, float]],
@@ -489,13 +507,15 @@ def _batched_window_medians(
 ) -> list[ChipResult | str]:
     """Window medians for all points, one bounded ``dask.compute`` per spatial cell.
 
-    Each cell restacks from the same (already-signed) items — the STAC query is
-    still one per month, only the raster bounds narrow.
+    Each cell restacks from the same items — the STAC query is still one per
+    month, only the raster bounds narrow — re-signed per cell so a long group
+    can't outlive its token.
     """
     results: list[ChipResult | str | None] = [None] * len(points_utm)
     batches = _subcell_batches(points_utm)
     for idx in batches:
         pts = [points_utm[i] for i in idx]
+        _resign(items)
         stack = _stack_items(
             items,
             _points_bbox_wgs84(pts, epsg),
@@ -556,11 +576,8 @@ def _compute_month(
                 logger.debug("STAC {}/{}: {} items", date_start, date_end, len(items))
 
             if attempt <= max_retries:
-                if attempt > 1:
-                    # Re-sign individually — the items list isn't an ItemCollection.
-                    for item in items:
-                        _strip_sas_inplace(item)
-                        pc.sign_inplace(item)
+                # No re-sign here — _batched_window_medians signs per sub-cell,
+                # which covers the retry case and mid-attempt expiry alike.
                 return _batched_window_medians(
                     items,
                     points_utm,
