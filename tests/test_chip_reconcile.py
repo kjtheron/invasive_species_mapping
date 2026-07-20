@@ -69,6 +69,10 @@ def _labels(obs_ids: list[str], zone: str | None = None) -> gpd.GeoDataFrame:
     )
 
 
+def _blocks():
+    return gpd.GeoDataFrame({"block_id": [0]}, geometry=[Point(18.5, -33.9).buffer(1)])
+
+
 def test_reconcile_deletes_obs_outside_the_canonical_set(tmp_path):
     """The sharp edge itself — documented so the guard's purpose stays legible."""
     manifest = _chip_set(tmp_path, ["euc_1", "pine_1"])
@@ -84,7 +88,7 @@ def test_species_subset_run_leaves_other_species_chips_alone(tmp_path):
     # via the "nothing to do" path, which is where the unguarded reconcile fired.
     out = extract_training_chips(
         labels=_labels(["euc_1"]),
-        blocks=gpd.GeoDataFrame({"block_id": [0]}, geometry=[Point(18.5, -33.9).buffer(1)]),
+        blocks=_blocks(),
         months_cfg=MONTHS,
         bands=["B02"],
         out_prefix=str(tmp_path),
@@ -99,7 +103,7 @@ def test_full_run_still_prunes_stale_chips(tmp_path):
     _chip_set(tmp_path, ["euc_1", "pine_1"])
     out = extract_training_chips(
         labels=_labels(["euc_1"]),
-        blocks=gpd.GeoDataFrame({"block_id": [0]}, geometry=[Point(18.5, -33.9).buffer(1)]),
+        blocks=_blocks(),
         months_cfg=MONTHS,
         bands=["B02"],
         out_prefix=str(tmp_path),
@@ -110,10 +114,6 @@ def test_full_run_still_prunes_stale_chips(tmp_path):
 
 
 # --- regrouping: moving a label to another zone re-chips only what differs ---
-
-
-def _blocks():
-    return gpd.GeoDataFrame({"block_id": [0]}, geometry=[Point(18.5, -33.9).buffer(1)])
 
 
 def _run(tmp, zone, monkeypatch, **kw):

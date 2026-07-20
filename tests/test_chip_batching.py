@@ -7,6 +7,8 @@ dense survey (MapWAPS) OOM'd a run that a sparse one (BioSCape) sailed through.
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from shapely.geometry import box
 
 from cmrv.ingest.chips import SUBCELL_M, _points_bbox_wgs84, _query_items, _subcell_batches
 
@@ -45,34 +47,27 @@ class _FakeItem:
         self.assets = {}
 
 
-def test_scene_cap_keeps_the_least_cloudy(monkeypatch):
-    clouds = [90.0, 5.0, 40.0, 1.0, 70.0]
+def _fake_client(clouds):
+    items = [_FakeItem(c) for c in clouds]
+    search = type("_Search", (), {"item_collection": lambda self: items})()
+    return type("_Client", (), {"search": lambda self, **kw: search})()
 
-    class _Search:
-        def item_collection(self):
-            return [_FakeItem(c) for c in clouds]
 
-    class _Client:
-        def search(self, **kw):
-            return _Search()
-
+@pytest.mark.parametrize(
+    "max_scenes,expected",
+    [
+        (3, [1.0, 5.0, 40.0]),  # keeps the N least cloudy, in that order
+        (None, [90.0, 5.0, 40.0, 1.0, 70.0]),  # no cap → untouched
+        (99, [90.0, 5.0, 40.0, 1.0, 70.0]),  # cap above the pool → untouched
+    ],
+)
+def test_scene_cap(monkeypatch, max_scenes, expected):
     monkeypatch.setattr("cmrv.ingest.chips.pc.sign_inplace", lambda item: item)
-    from shapely.geometry import box
-
-    kept = _query_items(_Client(), box(18, -34, 19, -33), "2023-02-01", "2023-02-28", max_scenes=3)
-    assert [i.properties["eo:cloud_cover"] for i in kept] == [1.0, 5.0, 40.0]
-
-
-def test_no_cap_keeps_everything(monkeypatch):
-    class _Search:
-        def item_collection(self):
-            return [_FakeItem(c) for c in (90.0, 5.0)]
-
-    class _Client:
-        def search(self, **kw):
-            return _Search()
-
-    monkeypatch.setattr("cmrv.ingest.chips.pc.sign_inplace", lambda item: item)
-    from shapely.geometry import box
-
-    assert len(_query_items(_Client(), box(18, -34, 19, -33), "a", "b", max_scenes=None)) == 2
+    kept = _query_items(
+        _fake_client([90.0, 5.0, 40.0, 1.0, 70.0]),
+        box(18, -34, 19, -33),
+        "2023-02-01",
+        "2023-02-28",
+        max_scenes=max_scenes,
+    )
+    assert [i.properties["eo:cloud_cover"] for i in kept] == expected

@@ -393,8 +393,7 @@ def _points_bbox_wgs84(
     buffer_m: float = BUFFER_M,
 ) -> object:
     """WGS84 bbox around UTM points, padded by *buffer_m* so edge labels get full chips."""
-    xs = [p[0] for p in points_utm]
-    ys = [p[1] for p in points_utm]
+    xs, ys = zip(*points_utm, strict=True)
     bbox_utm = box(min(xs) - buffer_m, min(ys) - buffer_m, max(xs) + buffer_m, max(ys) + buffer_m)
     return gpd.GeoSeries([bbox_utm], crs=f"EPSG:{epsg}").to_crs("EPSG:4326").iloc[0]
 
@@ -426,12 +425,9 @@ def _subcell_batches(
 
 def _check_compute_size(stack: xr.DataArray, cap: int = MAX_COMPUTE_BYTES) -> None:
     """Raise before materialising a stack larger than *cap* bytes."""
-    nbytes = stack.dtype.itemsize
-    for dim in stack.sizes.values():
-        nbytes *= dim
-    if nbytes > cap:
+    if stack.nbytes > cap:
         raise MemoryError(
-            f"refusing to compute {nbytes / 2**30:.1f} GiB stack "
+            f"refusing to compute {stack.nbytes / 2**30:.1f} GiB stack "
             f"({dict(stack.sizes)}) — cap is {cap / 2**30:.1f} GiB"
         )
 
@@ -1230,7 +1226,7 @@ def _reconcile_manifest(
         # (e.g. a --species subset) — leave its months alone, `keep_obs` decides.
         wrong_month = pd.Series(
             [
-                m not in expected_months.get(o, {m})
+                o in expected_months and m not in expected_months[o]
                 for o, m in zip(manifest["obs_id"], manifest["month_label"], strict=True)
             ],
             index=manifest.index,
@@ -1382,11 +1378,10 @@ def extract_training_chips(
         fully_chipped = {
             oid for oid, months in got.items() if expected_months.get(oid, set()) <= months
         }
-        n_regrouped = sum(
-            1
-            for oid, months in got.items()
-            if oid in expected_months and not expected_months[oid] <= months
-        )
+        # Regrouped ≠ partial: a partial obs is only *missing* months (crashed run,
+        # cloudy month), a regrouped one also has *extra* ones from its old zone's
+        # calendar, about to be pruned. Same count, different cause — keep them apart.
+        n_regrouped = sum(1 for oid, ms in got.items() if ms - expected_months.get(oid, ms))
         n_before = len(labels)
         labels = labels[~labels["obs_id"].isin(fully_chipped)]
         partial_ids = {r[0] for r in chipped_months} - fully_chipped
