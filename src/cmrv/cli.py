@@ -245,8 +245,19 @@ def ingest_chips(
 
     # Region-aware months: each label's rainfall zone (from its province) picks its
     # month set at extraction time (winter- vs summer-rainfall phenology).
+    # Refuse to guess a zone — silently defaulting an unlisted province to
+    # winter_rainfall chips a summer-rainfall label on the wrong calendar, and
+    # nothing downstream can tell. Cheapest possible moment to catch it.
     admin1_zone = cfg.get("admin1_zone", {})
-    labels["_zone"] = labels["aoi_admin1"].map(admin1_zone).fillna("winter_rainfall")
+    labels["_zone"] = labels["aoi_admin1"].map(admin1_zone)
+    unzoned = labels[labels["_zone"].isna()]
+    if not unzoned.empty:
+        missing = sorted(unzoned["aoi_admin1"].fillna("<missing>").unique())
+        raise ValueError(
+            f"no rainfall zone for province(s) {missing} "
+            f"({len(unzoned)} labels). Add them to `admin1_zone` in {pipeline} "
+            f"(known: {sorted(admin1_zone)}) before chipping."
+        )
     logger.info("label zones: {}", dict(labels["_zone"].value_counts()))
 
     # Thin BEFORE fetching imagery so we never download chips we'd discard.
