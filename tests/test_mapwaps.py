@@ -51,15 +51,15 @@ def test_lulc_unmapped_classes_drop() -> None:
 
 
 def test_every_mapped_class_resolves_under_landcover() -> None:
-    """The requirement: every _LULC_TO_CLASS target is a real western_cape_landcover member."""
-    cm = build_lookup("configs/labels_schema.yaml", "western_cape_landcover")
+    """The requirement: every _LULC_TO_CLASS target is a real sa_landcover member."""
+    cm = build_lookup("configs/labels_schema.yaml", "sa_landcover")
     for lulc, (member, _rank) in _LULC_TO_CLASS.items():
         assert cm.resolve(member) is not None, f"{lulc} → {member!r} resolves to no class"
 
 
 def test_poplar_resolves_to_populus_spp() -> None:
     """Alien_Poplar → 'Populus' → genus fallback → its own class (not iap_riparian)."""
-    cm = build_lookup("configs/labels_schema.yaml", "western_cape_landcover")
+    cm = build_lookup("configs/labels_schema.yaml", "sa_landcover")
     member, _ = _lulc_to_taxon("Alien_Poplar")
     assert cm.resolve(member) is not None
 
@@ -81,7 +81,7 @@ def _oli_gdf(records: list[dict], geoms: list[Point]) -> gpd.GeoDataFrame:
 
 
 def test_build_rows_resolves_under_landcover() -> None:
-    """An alien-genus row and a native row both resolve under western_cape_landcover."""
+    """An alien-genus row and a native row both resolve under sa_landcover."""
     gdf = _oli_gdf(
         [
             {"LULC_Class": "Alien_Pine", "Density___": 100, "DateTime": pd.Timestamp("2025-05-19")},
@@ -92,7 +92,7 @@ def test_build_rows_resolves_under_landcover() -> None:
     rows = _build_rows(
         gdf, OLI, "run1", dt.datetime(2026, 6, 24, tzinfo=dt.UTC), fallback_date=None
     )
-    cm = build_lookup("configs/labels_schema.yaml", "western_cape_landcover")
+    cm = build_lookup("configs/labels_schema.yaml", "sa_landcover")
 
     pine, water = rows
     assert pine["species_normalized"] == "Pinus"

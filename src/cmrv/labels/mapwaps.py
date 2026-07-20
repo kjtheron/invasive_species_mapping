@@ -4,7 +4,7 @@ Multiple MapWAPS catchments (Rebelo, Cogill, Skosana et al., Stellenbosch Univ. 
 figshare, CC-BY 4.0), each a shapefile of field-surveyed points. Every catchment
 uses a slightly different column layout / CRS / class vocabulary, so a
 per-catchment :class:`Catchment` config normalises them and a single master
-``_LULC_TO_CLASS`` crosswalk maps every class string to a ``western_cape_landcover``
+``_LULC_TO_CLASS`` crosswalk maps every class string to a ``sa_landcover``
 member (the same strings SANLC emits, so ``make-split`` resolves them).
 
 Decisions baked in (see each catchment's metadata PDF):
@@ -42,7 +42,7 @@ RAW_ROOT = Path("data/labels/raw")
 COORD_UNCERTAINTY_M = 15.0
 
 # MapWAPS class string → (species_normalized, taxon_rank) for the
-# ``western_cape_landcover`` map. Union across all catchments. Alien_* → IAP genus;
+# ``sa_landcover`` map. Union across all catchments. Alien_* → IAP genus;
 # native veg → VegMap-biome member; transformed → land-cover member. Classes NOT here
 # are dropped at ingest: "Shade" (shadow), "Burnt" (transient scar), "Bracken"
 # (indigenous fern, no land-cover class), "Alien_Other" (unspecific alien).
@@ -214,7 +214,7 @@ def ingest_mapwaps(
 ) -> str:
     """Ingest one MapWAPS catchment's training points → unified store (``source=mapwaps``).
 
-    Every class in ``_LULC_TO_CLASS`` is crosswalked to a ``western_cape_landcover``
+    Every class in ``_LULC_TO_CLASS`` is crosswalked to a ``sa_landcover``
     member (IAP genus / native biome / transformed land cover); unmapped classes
     (Shade / Burnt / Bracken / Alien_Other) are dropped. Geometry used as-is,
     reprojected to 4326 (assuming ``cat.src_crs`` when the shapefile declares none).

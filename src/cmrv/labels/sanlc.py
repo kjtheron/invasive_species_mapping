@@ -11,7 +11,7 @@ Pipeline: load all years → map each point's land-cover class to our scheme via
 + class, keep latest) → clip to WC → name natural-vegetation points by VegMap 2024
 biome (``T_BIOME``; SANLC's natural classes don't resolve the Cape biomes) →
 exclude known-IAP areas → emit ``source=sanlc``. Feeds the unified
-``western_cape_landcover`` class map alongside the IAP genera.
+``sa_landcover`` class map alongside the IAP genera.
 """
 
 from __future__ import annotations

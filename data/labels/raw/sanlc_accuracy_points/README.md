@@ -48,4 +48,4 @@ writes `source=sanlc` rows to `data/labels/processed/sanlc_accuracy_points/`. Th
    don't resolve the Cape biomes;
 5. excludes points within 320 m of a known IAP field point (chip-leakage guard).
 
-Feeds the unified `western_cape_landcover` class map alongside the IAP genera.
+Feeds the unified `sa_landcover` class map alongside the IAP genera.
