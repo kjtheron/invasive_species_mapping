@@ -270,6 +270,9 @@ def ingest_chips(
         out_prefix=out_prefix,
         cloud_cover_max=cfg.get("cloud_cover_max", 40),
         max_scenes=cfg.get("max_scenes_per_composite"),
+        # A --species run only knows about its own subset, so it must not prune
+        # everything else's chips as "no longer in the thinned set".
+        reconcile=species is None,
         default_year=default_year,
         max_workers=max_workers,
     )

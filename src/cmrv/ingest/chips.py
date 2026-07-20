@@ -1252,6 +1252,7 @@ def extract_training_chips(
     default_year: int = 2023,
     max_workers: int = 6,
     year_fallback: bool = True,
+    reconcile: bool = True,
 ) -> pd.DataFrame:
     """Extract temporally-aligned training chips for all labels.
 
@@ -1362,7 +1363,7 @@ def extract_training_chips(
 
     if labels.empty:
         logger.success("all labels already fully chipped — nothing to do")
-        if year_fallback:  # top-level call: still reconcile away thinned-out cruft
+        if year_fallback and reconcile:  # top-level: reconcile away thinned-out cruft
             existing_manifest = _reconcile_manifest(existing_manifest, canonical_obs, manifest_uri)
         return existing_manifest
 
@@ -1474,7 +1475,9 @@ def extract_training_chips(
 
     # Top-level call only (year_fallback=True): after this run + any Y-1 fallback,
     # prune chips for obs no longer in the thinned set so the manifest == canonical.
-    if year_fallback:
+    # Skipped when the caller chipped a SUBSET (--species): canonical_obs is then
+    # only that subset, so reconciling would delete every other species' chips.
+    if year_fallback and reconcile:
         manifest_df = _reconcile_manifest(manifest_df, canonical_obs, manifest_uri)
 
     return manifest_df
