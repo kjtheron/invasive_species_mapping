@@ -1,5 +1,8 @@
 aoi:
-  path: data/aoi/processed/western_cape.parquet
+  # Training and inference deliberately differ: labels are chipped nationally so
+  # KZN/EC field data isn't clipped away, while the delivered map stays WC.
+  train_path: data/aoi/processed/south_africa.parquet
+  infer_path: data/aoi/processed/western_cape.parquet
   tile_km: 10
   # tile/block grids build in SA Albers equal-area (see cmrv.aoi.SA_ALBERS) — national,
   # true-square tiles country-wide; not UTM 34S (skews outside its zone).
@@ -54,3 +57,8 @@ s2_bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
 # so this is set permissively (95) — letting more candidate scenes into the
 # monthly median, after which SCL strips the bad pixels per-scene.
 cloud_cover_max: 95
+# Keep only the N least-cloudy scenes per month window. The permissive cap above
+# plus ±15d window padding can pull 60+ scenes into a single median; the time axis
+# multiplies compute memory directly, and beyond ~20 scenes the median stops
+# improving while the RAM bill keeps climbing.
+max_scenes_per_composite: 20

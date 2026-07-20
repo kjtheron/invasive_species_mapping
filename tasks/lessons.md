@@ -100,6 +100,42 @@ which was inflating per-source counts by 1 and injecting a geometry-less phantom
 
 ---
 
+## 2026-07-20 — Size the work unit by cost, not by geography
+
+**Mistake:** `ingest-chips` OOM-killed twice (7.0 GB, then 9.2 GB RSS on a 15 GB box),
+hours into runs, on *some* blocks but not others. The work unit is a
+`(block_id, year, zone)` group — a 10 km square — and every label in it went into one
+`dask.compute`. Dask holds each root chunk resident until its last dependent window
+finishes, so a block whose labels are scattered across its full extent materialises the
+**dense** cube, not just the 64×64 windows. Peak was therefore
+`bbox_area × n_bands × n_scenes × 4` where the first two terms are chosen by the *data*.
+Under BioSCape (83 plots province-wide) groups held ~1–3 points and the bbox collapsed
+to a few hundred metres. Under MapWAPS (36k survey points; one block held 558) the bbox
+is the whole block — ~2.6 GB per worker, × 6 workers. Nothing in the code changed; the
+input distribution did. The earlier `chunksize 1024→256` fix reduced per-window read
+amplification but not the aggregate, because the ceiling is the whole cube either way.
+
+**Rule:** Any batched compute over spatially-distributed points must bound its own
+extent. Batch by a fixed spatial cell (`SUBCELL_M`, 4 km), one `dask.compute` per cell,
+so bbox — and therefore peak RSS — is a constant the code picks. 5 points or 500 in a
+cell now cost the same. Bound the time axis too: `max_scenes_per_composite` keeps the N
+least-cloudy scenes, since a permissive `cloud_cover_max: 95` plus ±15 d padding pulls
+60+ scenes into one median.
+
+**How to apply:** Query STAC once per group-month over the group bbox (items are just
+metadata), then restack per cell with narrower `bounds_latlon` — same network cost,
+bounded memory. `_check_compute_size` raises above `MAX_COMPUTE_BYTES` (2 GiB) so a
+mis-sized stack fails in seconds instead of OOM-ing at hour four. When a cost is
+data-dependent, the guard belongs at the point of allocation, not in a tuned constant.
+
+**Why this matters:** Density-dependent memory is invisible until a denser dataset
+lands, then it costs multi-hour runs and looks like a flaky bug — some chips work, some
+don't. The next survey will be denser still. Also: label counts per block were skewed
+186× (median 3, max 558) and nothing surfaced that, so a distribution check on a new
+source is worth more than it looks.
+
+---
+
 ## Never `to_zarr()` to a path you opened lazily — it corrupts the store
 
 **Rule:** `xr.open_zarr(p)` is lazy. Doing `ds = open_zarr(p); ds2 = ds.assign_coords(...); ds2.to_zarr(p, mode="w")` overwrites chunks while they're still being read back to write — it silently shreds the data (here: `emb` filled with NaN, `obs_id` emptied). zarr-v3 strings are fine; the in-place rewrite was the bug.

@@ -85,15 +85,18 @@ def aoi_sa(
 
 
 def aoi_tiles(
-    aoi: str = "data/aoi/processed/western_cape.parquet",
+    aoi: str | None = None,
     km: float = 10.0,
     out: str = "data/aoi/processed/tiles.parquet",
     crs: str = SA_ALBERS,
+    pipeline: str = "configs/pipeline.yaml",
 ) -> None:
     """Build a square tile grid over the AOI and write as GeoParquet (inference unit).
 
     Grid CRS defaults to national equal-area SA Albers (true-square tiles country-wide).
+    --aoi defaults to ``aoi.infer_path`` (the delivered map's extent, not the training one).
     """
+    aoi = aoi or load_config(pipeline)["aoi"]["infer_path"]
     gdf = read_gdf(aoi)
     tiles = build_tile_grid(gdf, tile_km=km, crs=crs)
     logger.info("built {} tiles of {} km", len(tiles), km)
@@ -134,9 +137,9 @@ def labels_mapwaps_ingest(
 
     Registered catchments: Olifants-Doring (WC), Tugela (KZN), uMzimvubu (EC).
     All mappable classes ingested — IAP genera (Alien_*), native biomes, transformed
-    land cover — each crosswalked to a ``western_cape_landcover`` member (Shade /
+    land cover — each crosswalked to a ``sa_landcover`` member (Shade /
     Burnt / Bracken / Alien_Other dropped). Pass ``--catchment <name>`` for one.
-    Assign class_id at make-split via ``--class-map-name western_cape_landcover``.
+    Assign class_id at make-split via ``--class-map-name sa_landcover``.
     """
     keys = [catchment] if catchment else list(CATCHMENTS)
     for key in keys:
@@ -151,7 +154,7 @@ def labels_sanlc_ingest(
 
     Field-verified land-cover reference points → our classes (natural points named
     by VegMap biome); identical points across years de-duplicated; known-IAP areas
-    excluded. Feeds the unified ``western_cape_landcover`` class map at make-split.
+    excluded. Feeds the unified ``sa_landcover`` class map at make-split.
     """
     path = ingest_sanlc(root=root)
     logger.success("sanlc ingest complete — {}", path)
@@ -197,7 +200,7 @@ def labels_inspect(
 
 
 def ingest_chips(
-    aoi: str = "data/aoi/processed/south_africa.parquet",
+    aoi: str | None = None,
     pipeline: str = "configs/pipeline.yaml",
     out_prefix: str = "data/chips/train",
     root: str = PROCESSED_ROOT,
@@ -219,11 +222,13 @@ def ingest_chips(
     Manifest-based incremental extraction — existing chips are skipped, so it's
     safe to re-run after adding a label source.
 
+    --aoi: defaults to ``aoi.train_path`` (national SA — so KZN/EC labels aren't clipped).
     --block-km: spatial-block size in km (default 10; STAC-query batching + CV unit).
     --thin-m: keep one label per species per thin-m cell, before download (default 20).
     --species: restrict to these species (by name fragment). Omit for all.
     """
     cfg = load_config(pipeline)
+    aoi = aoi or cfg["aoi"]["train_path"]
 
     labels = load_training_labels(
         aoi_uri=aoi,
@@ -264,6 +269,7 @@ def ingest_chips(
         bands=cfg["s2_bands"],
         out_prefix=out_prefix,
         cloud_cover_max=cfg.get("cloud_cover_max", 40),
+        max_scenes=cfg.get("max_scenes_per_composite"),
         default_year=default_year,
         max_workers=max_workers,
     )
@@ -275,12 +281,13 @@ def ingest_chips(
 
 
 def chips_make_split(
-    aoi: str = "data/aoi/processed/western_cape.parquet",
+    aoi: str | None = None,
     manifest: str = "data/chips/train/manifest.parquet",
     out_prefix: str = "data/chips/train",
     species: list[str] | None = None,
     class_map_name: str | None = None,
     schema_path: str = "configs/labels_schema.yaml",
+    pipeline: str = "configs/pipeline.yaml",
     seed: int = 42,
     block_km: float = 10.0,
     train_frac: float = 0.70,
@@ -304,7 +311,10 @@ def chips_make_split(
     --min-class-obs: drop classes with fewer than N obs before splitting (0 = keep
                      all). Use for classes too rare to appear in every fold.
     --lock-folds: re-use existing block_folds.parquet assignments.
+    --aoi: defaults to ``aoi.train_path`` — must match what ``ingest-chips`` used,
+           or nationally-chipped labels get clipped out of the split.
     """
+    aoi = aoi or load_config(pipeline)["aoi"]["train_path"]
     result = make_split(
         manifest_uri=manifest,
         aoi_uri=aoi,

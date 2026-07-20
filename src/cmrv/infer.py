@@ -34,13 +34,15 @@ RESOLUTION_M = 10
 NODATA = 255
 
 
-def _composite_box(geom_wgs84, year, months_cfg, bands, cloud_cover_max):
+def _composite_box(geom_wgs84, year, months_cfg, bands, cloud_cover_max, max_scenes=None):
     """3-month median composite → ``(T, C, H, W)``, transform, epsg (from the S2 data)."""
     client = _stac_client()
     epsg, arrs, transform = None, [], None
     for m in months_cfg:
         start, end = f"{year}-{m['start'][5:]}", f"{year}-{m['end'][5:]}"
-        items = _query_items(client, geom_wgs84, start, end, cloud_cover_max=cloud_cover_max)
+        items = _query_items(
+            client, geom_wgs84, start, end, cloud_cover_max=cloud_cover_max, max_scenes=max_scenes
+        )
         if not items:
             raise ValueError(f"no S2 scenes for {start}/{end} — try another year/box")
         if epsg is None:  # native Sentinel-2 CRS, not hardcoded
@@ -147,7 +149,12 @@ def infer_box(
     cfg = load_config(pipeline)
     months, bands = cfg["months"], cfg["s2_bands"]
     stack, transform, epsg = _composite_box(
-        shp_box(*bbox), year, months, bands, cfg.get("cloud_cover_max", 95)
+        shp_box(*bbox),
+        year,
+        months,
+        bands,
+        cfg.get("cloud_cover_max", 95),
+        cfg.get("max_scenes_per_composite"),
     )
     t, c, h, w = stack.shape
     logger.info("box composite: {} months × {} bands × {}×{} px @ EPSG:{}", t, c, h, w, epsg)

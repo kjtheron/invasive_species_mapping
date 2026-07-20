@@ -1,52 +1,50 @@
 # Phase 0 Prototype — Task Tracker
 
 Conventions & architecture: [CLAUDE.md](../CLAUDE.md). Phase 0 builds **Lens A
-(Invasive Alien Plants)** for the **Western Cape**, **locally** (no cloud bucket),
-from **cover/abundance-bearing field datasets**, tuned to **WC phenology**. The
-unified `western_cape_landcover` map classifies every pixel (IAP genera + native
-biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
+(Invasive Alien Plants)**, **locally** (no cloud bucket), from **cover/abundance-bearing
+field datasets**. Training extent is national SA (`aoi.train_path`) so KZN/EC labels
+aren't clipped; the delivered map stays WC (`aoi.infer_path`). The unified
+`sa_landcover` map classifies every pixel (IAP genera + native biomes + transformed);
+under the IAP-only maps, "not-IAP" is an OOD/threshold call instead.
 
 ---
 
 ## Completed
 
-- **AOI & tile grid** — `cmrv aoi-wc`, `aoi-tiles` → `data/aoi/*.parquet` (WC; tiles = inference unit)
-- **S2 compositing** — inline in `ingest-chips` (training windows) + `infer` (inference boxes): MPC STAC → SCL mask → monthly median (no separate composite-to-disk step)
+- **AOI & tile grid** — `aoi-wc` / `aoi-sa` / `aoi-tiles`; grids in SA Albers equal-area.
+- **S2 compositing** — inline in `ingest-chips` + `infer`: MPC STAC → SCL mask → monthly
+  median. No separate composite-to-disk step.
 - **Label adapters (3)** — `labels-bioscape-ingest` (VegPlots), `labels-mapwaps-ingest`
-  (Olifants-Doring IAP genera), `labels-sanlc-ingest` (SANLC 2018/20/22 accuracy points
-  + VegMap biome). IAP membership from class-map `members[]`.
-- **Store inspector** — `cmrv labels` (per-source counts + coord-uncertainty/cover coverage)
-- **MapWAPS native/land-cover classes** — `_LULC_TO_CLASS` crosswalks all 23 MapWAPS
-  classes to `western_cape_landcover` members (native→VegMap biome, transformed→land
-  cover); `iap_only` dropped. SANLC IAP-exclusion now buffers only species/genus rows.
-- **MapWAPS multi-catchment (SA-wide)** — generic adapter + `CATCHMENTS` registry
-  (per-catchment cols/CRS/date) over Olifants-Doring (WC) + Tugela (KZN) + uMzimvubu
-  (EC); `download/mapwaps.py` fetches TrainingData from figshare. New classes:
-  `renosterveld` (split from fynbos), `savanna` (Indigenous Bush_*), `populus_spp`
-  (Alien_Poplar). Store **37,516 obs** across 3 provinces, all resolve under
-  `western_cape_landcover`. Luvuvhu (dup of Tugela) + Sabie-Croc (empty) broken upstream.
-- **Chip extraction** — `cmrv ingest-chips` (thin → 64×64 per obs×month, 10 km blocks,
-  per-label window compute, incremental + self-reconcile to the thinned set)
-- **Split** — `cmrv make-split` (iterative-stratification block folds on `class_id`,
-  `--min-class-obs`, writes `split.parquet`). `western_cape_landcover`: 14 classes,
-  2,448 obs, 12/13 classes present in all three folds.
-- **Embedding** — `cmrv embed` (UniverSat center-token, 10 m per-pixel → single
-  lon/lat-indexed Zarr cube, 2,454×768; DataLoader prefetch, `--device {cpu,cuda}`/`--amp`).
-- **Head** — `cmrv train-head` (linear / MLP, on-the-fly balanced CE, per-class test
-  metrics). **Linear macro-F1 0.60** on the spatial-block test fold (≈0.74 over the
-  ≥10-support classes); pinus 0.94, prosopis 0.77, built_up/water 0.92. Linear > MLP.
+  (3 catchments), `labels-sanlc-ingest` (SANLC accuracy points + VegMap biome).
+- **Store** — **37,516 obs** across WC/KZN/EC, all resolving under `sa_landcover`.
+  Inspect with `cmrv labels`.
+- **Region-aware months** — `months_by_zone` + `admin1_zone`; winter feb/may/sep,
+  summer jul/sep/dec (Masemola et al. 2020, IJAEOG 93). Chips in per-image native S2
+  UTM; inference warps to SA Albers so tiles mosaic.
+- **Chip extraction** — `ingest-chips`: thin → 64×64 per obs×month, 10 km blocks,
+  incremental + self-reconciling to the thinned set.
+- **Memory-bounded chipping** — one `dask.compute` per 4 km sub-cell (`SUBCELL_M`) +
+  `max_scenes_per_composite: 20`, so peak RSS no longer scales with labels-per-block.
+  See [lessons.md](lessons.md) — this OOM-killed two multi-hour runs.
+- **Split** — `make-split`: iterative-stratification block folds on `class_id`.
+- **Embedding** — `embed`: UniverSat center-token → lon/lat-indexed Zarr cube.
+- **Head** — `train-head`: linear / MLP, balanced CE, per-class test metrics.
+  **Linear macro-F1 0.60** (≈0.74 over ≥10-support classes); pinus 0.94, prosopis 0.77,
+  built_up/water 0.92. Linear > MLP.
 
 ---
 
 ## Next
 
-1. **Wall-to-wall inference** (Stage 7, issue #3): tile → 3-month composite → UniverSat
-   **dense** token grid → frozen head per token → per-pixel class + uncertainty +
-   Mahalanobis OOD → triplet COGs in `data/outputs/` → viewer. Port chips.py's STAC
-   retry/re-sign/download-fallback robustness into `composite.py` first.
-2. **More training data — the biggest accuracy lever.** The set is small + imbalanced
-   (rare classes have 1–4 test samples). BioSCape cover-bearing data is under embargo
-   until **~Oct 2026**; source interim cover-bearing datasets meanwhile. Iterating
+1. **Re-chip the full store** — chips wiped 2026-07-20 (class scope changed to
+   IAP + non-IAP nationally). ~19.3k thinned labels × 3 months; expect a long run.
+   Then re-split on `sa_landcover` and retrain.
+2. **Wall-to-wall inference** (Stage 7, issue #3): tile → 3-month composite → dense
+   UniverSat token grid → frozen head → class + uncertainty + Mahalanobis OOD →
+   triplet COGs in `data/outputs/` → viewer.
+3. **More training data — the biggest accuracy lever.** The set is small + imbalanced
+   (rare classes have 1–4 test samples). BioSCape cover-bearing data is embargoed until
+   **~Oct 2026**; source interim cover-bearing datasets meanwhile. Iterating
    loss/architecture won't move the needle — data will.
 
 ---
@@ -54,39 +52,28 @@ biomes + transformed); "not-IAP" is ultimately an OOD/threshold call.
 ## Decisions on record
 
 - **Bakeoff → UniverSat** (dropped Clay + SEN2SR): on 240 chips (spatial-block CV),
-  UniverSat center-token + linear ≈ 0.55, beating a Sentinel-2 Random Forest (0.38)
-  and the raw-spectral floor (0.45). Head stays linear/MLP; native 10 m, no SR.
-- **VHR:** spine stays S2-only (train + inference) — temporal consistency, UniverSat
-  wins on S2 alone. SPOT 6/7 (1.5 m annual) the better VHR *if* ever pursued
-  (training-only via missing-modality inference), deferred.
+  UniverSat center-token + linear ≈ 0.55, beating a Sentinel-2 Random Forest (0.38) and
+  the raw-spectral floor (0.45). Head stays linear/MLP; native 10 m, no SR.
+- **VHR:** spine stays S2-only — temporal consistency, and UniverSat wins on S2 alone.
+  SPOT 6/7 (1.5 m annual) the better VHR *if* ever pursued; deferred.
+- **Training extent ≠ inference extent** — split into `aoi.train_path` (national) and
+  `aoi.infer_path` (WC) in `pipeline.yaml`; both are read by the CLI, not decorative.
+- **Chip everything, subset at training time** — `ingest-chips` consults no class map;
+  `make-split --class-map-name` decides scope. Keeps the manifest the empirical record.
 
 ## Deferred (designed, not built)
 
-- [x] **Region-aware months per province** — DONE. `pipeline.yaml` `months_by_zone`
-  (winter_rainfall feb/may/sep; summer_rainfall **jul/sep/dec**) + `admin1_zone`; `ingest-chips`
-  tags each label's zone from its province and composites per-zone; `embed` reads each obs's
-  own months from the manifest (per-obs day-of-year). Summer months from Masemola et al. 2020
-  (IJAEOG 93): dry-winter senescence / Acacia flowering / peak summer growth, >80% each. AOI
-  expanded to national SA (`aoi-sa`, `fetch_provinces`) so KZN/EC labels aren't clipped; tile+
-  block grids in **SA Albers equal-area** (`cmrv.aoi.SA_ALBERS`), not UTM 34S. Chip pixel grid
-  is **per-image native S2 UTM zone** (`utm_epsg` per group; manifest stores lon/lat, so embed
-  is CRS-agnostic); inference composites+embeds in the native zone then warps the output map to
-  SA Albers (`infer_box(out_crs=SA_ALBERS)`) so tiles mosaic. *Deferred:* a true rainfall-
-  seasonality-zone layer (Schulze) where a province is mixed (EC south coast).
-- [ ] **Caching (perf)** — memoise repeated / expensive work as the store + AOI grow:
-  - *Observation store:* `observations.read_all` rebuilds the whole store (`gpd.read_parquet` per
-    partition + `pd.concat`) on every call — cache by (root, partition mtimes, sources, bbox);
-    invalidate when a partition file changes. `summary`/`write_summary` and `sanlc` ingest each
-    re-read via `read_all` — they'd ride the same cache.
-  - *Ingest:* skip re-ingesting a source partition whose raw inputs are unchanged (hash the raw
-    file(s) / figshare md5 → skip `write_partition` if the partition already reflects them).
-  - *STAC:* **cannot cache `_query_items` output** — it signs asset hrefs inline and the MPC SAS
-    tokens are ~1 h TTL, so a cache would serve stale/expired URLs. Only the *unsigned* search
-    metadata (item ids / geometry / properties) is static; caching would mean splitting signing out
-    of search and re-signing on use — not worth it. Leave STAC uncached.
-  - *Encoder forward:* training embeddings are **already persisted** (`embed` → Zarr cube; `train-head`
-    reuses them, no re-forward). Inference-time embedding cache is **not wanted** (decided) — infer
-    re-embeds each run.
-- [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size, leave-one-eco-region-out (before quoting accuracy)
-- [ ] **Embedding store at scale** — single Zarr cube built; Zarr→WebDataset shards + GEE→bucket only when embeddings outgrow memory / for cloud-scale training (issue #8)
-- [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics)
+- [ ] **Caching (perf)** — as the store + AOI grow:
+  - *Observation store:* `read_all` rebuilds the whole store on every call — cache by
+    (root, partition mtimes, sources, bbox). `summary` / `sanlc` ingest ride the same cache.
+  - *Ingest:* skip a source partition whose raw inputs are unchanged (hash raw / figshare md5).
+  - *STAC:* **uncacheable** — `_query_items` signs hrefs inline and MPC SAS tokens are
+    ~1 h TTL. Splitting signing out of search isn't worth it. Leave uncached.
+  - *Encoder forward:* training embeddings already persist to Zarr; an inference-time
+    embedding cache is **not wanted** (decided).
+- [ ] **Spatial-CV upgrades** — buffered/dead-zone folds, variogram-informed block size,
+  leave-one-eco-region-out (before quoting accuracy publicly).
+- [ ] **True rainfall-seasonality zones** (Schulze) where a province is mixed (EC south coast).
+- [ ] **Embedding store at scale** — Zarr→WebDataset shards only when embeddings outgrow
+  memory / for cloud-scale training (issue #8).
+- [ ] Lenses B (mine rehab), C (EUDR), D (biodiversity/bioacoustics).

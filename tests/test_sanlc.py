@@ -7,8 +7,8 @@ from cmrv.labels.sanlc import ACC_CLASS_TO_CLASS, BIOME_TO_CLASS
 
 
 def test_emitted_classes_resolve_in_landcover_map() -> None:
-    """Every class the adapter emits must exist in western_cape_landcover."""
-    cm = build_lookup("configs/labels_schema.yaml", "western_cape_landcover")
+    """Every class the adapter emits must exist in sa_landcover."""
+    cm = build_lookup("configs/labels_schema.yaml", "sa_landcover")
     emitted = {c for c in ACC_CLASS_TO_CLASS.values() if c != "NATURAL"} | set(
         BIOME_TO_CLASS.values()
     )

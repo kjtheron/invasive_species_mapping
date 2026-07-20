@@ -120,9 +120,11 @@ Downstream: `aoi-wc` / `aoi-sa` / `aoi-tiles` (once), then `embed` (UniverSat cu
 Compositing is inline — `ingest-chips` (training windows) and `infer` (inference
 boxes) each build their own S2 composite; there is no separate composite-to-disk
 step. Chip-stack months are **region-aware** (`pipeline.yaml` `months_by_zone`):
-winter-rainfall WC = Feb/May/Sep, summer-rainfall KZN/EC = Feb/Jun/Sep; each label
+winter-rainfall WC = Feb/May/Sep, summer-rainfall KZN/EC = Jul/Sep/Dec; each label
 picks its set from its province (`admin1_zone`). The **training** AOI is national SA
-(`aoi-sa`, so KZN/EC labels aren't clipped); **inference** stays WC (`aoi-wc`).
+(`aoi.train_path`, so KZN/EC labels aren't clipped); **inference** stays WC
+(`aoi.infer_path`). Both are read from `pipeline.yaml` by the CLI — don't hardcode an
+AOI path in a verb default.
 
 ## Common tripwires
 
@@ -132,6 +134,10 @@ picks its set from its province (`admin1_zone`). The **training** AOI is nationa
 - **Label leakage.** Build spatial-block splits *before* training; never train on a block overlapping a held-out one.
 - **Silent fp16 NaNs.** The embedding model + AMP can emit NaN on bad input — assert `torch.isfinite(...)` after each forward.
 - **No distributed dask.** `stackstac`'s internal dask is enough; one box.
+- **Density-dependent memory.** A `dask.compute` over scattered points materialises the
+  whole bbox, not just the windows — so peak RSS tracks labels-per-block, which varies
+  186× across the store. Batch by a fixed spatial cell (`SUBCELL_M`) and cap scenes per
+  composite; never let the data pick the size of a work unit.
 
 ## Working style
 

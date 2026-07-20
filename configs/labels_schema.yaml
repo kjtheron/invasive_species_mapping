@@ -6,7 +6,7 @@
 #
 # Two framings coexist: the IAP-only maps (western_cape_iap, *_genus) where
 # "not-IAP" is left to downstream OOD novelty flagging, and the unified
-# western_cape_landcover map where native biomes (VegMap T_BIOME) + transformed
+# sa_landcover map where native biomes (VegMap T_BIOME) + transformed
 # classes (SANLC accuracy points) are explicit — every pixel classified.
 #
 # Single source of truth: each class lists its ``members`` — canonical scientific
@@ -134,13 +134,18 @@ class_maps:
         - "Populus alba"
         - "Populus canescens"
         - "Sesbania punicea"
+      # MapWAPS labels Alien_Poplar at genus rank ("Populus"), which the binomials
+      # above don't catch. sa_landcover gives Populus its own class (21); here it
+      # stays folded into riparian.
+      genus_fallback: true
+      genus: populus
 
   # --------------------------------------------------------------------------
   # Unified land-cover map: IAP genera (field) + native biomes (VegMap T_BIOME)
   # + transformed/other (collapsed SANLC accuracy-point classes). Every pixel
   # classified → seamless map. Biome + transformed labels come from
   # `cmrv labels-sanlc-ingest`; their members are the strings that adapter emits.
-  western_cape_landcover:
+  sa_landcover:
     # --- IAP genera (field adapters) ---
     0:
       name: acacia_spp

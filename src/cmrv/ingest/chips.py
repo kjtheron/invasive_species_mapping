@@ -90,6 +90,13 @@ BUFFER_M = (CHIP_PX * RESOLUTION_M) / 2
 # loader can filter/weight further.
 MIN_VALID_FRAC = 0.5
 BLOCK_KM = 10
+# Spatial batch size for a single dask.compute. Peak RSS scales with the bbox of
+# whatever goes into one compute call; batching by a fixed cell makes that bbox a
+# constant the CODE picks, not one the label density picks. See _subcell_batches.
+SUBCELL_M = 4000.0
+# Hard ceiling on bytes materialised by one compute call — a loud failure beats an
+# OOM four hours in. ~1.1 GB at 4 km × 11 bands × 20 scenes leaves margin for 6 workers.
+MAX_COMPUTE_BYTES = 2 << 30
 # Default ±days padding around each calendar-month window (chips only).
 # Widening to ±15d roughly doubles the candidate-scene pool per window so
 # the median can recover cloud-free pixels in cloudy months.
@@ -285,10 +292,17 @@ def _query_items(
     date_end: str,
     *,
     cloud_cover_max: int = 40,
+    max_scenes: int | None = None,
 ) -> list:
     """Search STAC and return freshly-signed items (empty list if none).
 
     Each item is signed individually so the call works on plain lists too.
+
+    ``max_scenes`` keeps only the *N* least-cloudy scenes. The time axis is a
+    direct multiplier on compute memory, and a permissive ``cloud_cover_max``
+    (95) plus ±15 d window padding can pull 60+ scenes into one median. Taking
+    the clearest N bounds that, and the dropped scenes are the ones SCL would
+    have masked to NaN anyway.
     """
     items = list(
         client.search(
@@ -298,6 +312,9 @@ def _query_items(
             query={"eo:cloud_cover": {"lt": cloud_cover_max}},
         ).item_collection()
     )
+    if max_scenes and len(items) > max_scenes:
+        items.sort(key=lambda it: it.properties.get("eo:cloud_cover", 100.0))
+        items = items[:max_scenes]  # sort before signing — don't sign what we drop
     for item in items:
         pc.sign_inplace(item)
     return items
@@ -370,6 +387,55 @@ def _download_item_assets(item, bands: list[str], tmp_dir: Path) -> dict[str, st
 ChipResult = tuple[np.ndarray, rasterio.transform.Affine, float]
 
 
+def _points_bbox_wgs84(
+    points_utm: list[tuple[float, float]],
+    epsg: int,
+    buffer_m: float = BUFFER_M,
+) -> object:
+    """WGS84 bbox around UTM points, padded by *buffer_m* so edge labels get full chips."""
+    xs = [p[0] for p in points_utm]
+    ys = [p[1] for p in points_utm]
+    bbox_utm = box(min(xs) - buffer_m, min(ys) - buffer_m, max(xs) + buffer_m, max(ys) + buffer_m)
+    return gpd.GeoSeries([bbox_utm], crs=f"EPSG:{epsg}").to_crs("EPSG:4326").iloc[0]
+
+
+def _subcell_batches(
+    points_utm: list[tuple[float, float]],
+    cell_m: float = SUBCELL_M,
+) -> list[list[int]]:
+    """Group point indices into fixed ``cell_m`` spatial cells.
+
+    Why this exists: the memory of one ``dask.compute`` is roughly
+    ``bbox_area × n_bands × n_scenes × 4``, and dask holds every root chunk
+    resident until its last dependent window finishes — so a block whose labels
+    are scattered across its full extent materialises the *dense* cube, not just
+    the windows. With a sparse survey (BioSCape: 83 plots province-wide) that
+    bbox collapsed to a few hundred metres and nobody noticed. With a dense one
+    (MapWAPS: 558 labels in one 10 km block) it is the whole block, ~2.6 GB per
+    worker, and six workers OOM a 15 GB box hours into a run.
+
+    Batching by a fixed cell makes the bbox — and therefore peak RSS — a
+    constant regardless of how densely the survey sampled. 5 points or 500 in a
+    cell costs the same.
+    """
+    cells: dict[tuple[int, int], list[int]] = {}
+    for i, (x, y) in enumerate(points_utm):
+        cells.setdefault((int(x // cell_m), int(y // cell_m)), []).append(i)
+    return list(cells.values())
+
+
+def _check_compute_size(stack: xr.DataArray, cap: int = MAX_COMPUTE_BYTES) -> None:
+    """Raise before materialising a stack larger than *cap* bytes."""
+    nbytes = stack.dtype.itemsize
+    for dim in stack.sizes.values():
+        nbytes *= dim
+    if nbytes > cap:
+        raise MemoryError(
+            f"refusing to compute {nbytes / 2**30:.1f} GiB stack "
+            f"({dict(stack.sizes)}) — cap is {cap / 2**30:.1f} GiB"
+        )
+
+
 def _window_medians(
     stack: xr.DataArray,
     points_utm: list[tuple[float, float]],
@@ -416,6 +482,37 @@ def _window_medians(
     return results  # type: ignore[return-value]  # every slot is filled above
 
 
+def _batched_window_medians(
+    items: list,
+    points_utm: list[tuple[float, float]],
+    bands: list[str],
+    *,
+    chip_px: int,
+    resolution_m: int,
+    epsg: int,
+) -> list[ChipResult | str]:
+    """Window medians for all points, one bounded ``dask.compute`` per spatial cell.
+
+    Each cell restacks from the same (already-signed) items — the STAC query is
+    still one per month, only the raster bounds narrow.
+    """
+    results: list[ChipResult | str | None] = [None] * len(points_utm)
+    batches = _subcell_batches(points_utm)
+    for idx in batches:
+        pts = [points_utm[i] for i in idx]
+        stack = _stack_items(
+            items,
+            _points_bbox_wgs84(pts, epsg),
+            bands,
+            resolution_m=resolution_m,
+            epsg=epsg,
+        )
+        _check_compute_size(stack)
+        for i, res in zip(idx, _window_medians(stack, pts, chip_px), strict=True):
+            results[i] = res
+    return results  # type: ignore[return-value]  # batches partition every index
+
+
 def _compute_month(
     client: pystac_client.Client,
     geom_wgs84,
@@ -430,6 +527,7 @@ def _compute_month(
     epsg: int = 32734,
     max_retries: int = 3,
     retry_delay_s: float = 10.0,
+    max_scenes: int | None = None,
 ) -> list[ChipResult | str] | None:
     """Query + stack + per-label window median for one month, with retries.
 
@@ -444,7 +542,12 @@ def _compute_month(
         try:
             if not items:
                 items = _query_items(
-                    client, geom_wgs84, date_start, date_end, cloud_cover_max=cloud_cover_max
+                    client,
+                    geom_wgs84,
+                    date_start,
+                    date_end,
+                    cloud_cover_max=cloud_cover_max,
+                    max_scenes=max_scenes,
                 )
                 if not items:
                     logger.info(
@@ -462,8 +565,14 @@ def _compute_month(
                     for item in items:
                         _strip_sas_inplace(item)
                         pc.sign_inplace(item)
-                lazy = _stack_items(items, geom_wgs84, bands, resolution_m=resolution_m, epsg=epsg)
-                return _window_medians(lazy, points_utm, chip_px)
+                return _batched_window_medians(
+                    items,
+                    points_utm,
+                    bands,
+                    chip_px=chip_px,
+                    resolution_m=resolution_m,
+                    epsg=epsg,
+                )
 
             # Final fallback: re-sign + download each scene's assets locally.
             logger.info(
@@ -491,10 +600,14 @@ def _compute_month(
                     local_items.append(patched)
                 if not local_items:
                     return None
-                lazy = _stack_items(
-                    local_items, geom_wgs84, bands, resolution_m=resolution_m, epsg=epsg
+                return _batched_window_medians(
+                    local_items,
+                    points_utm,
+                    bands,
+                    chip_px=chip_px,
+                    resolution_m=resolution_m,
+                    epsg=epsg,
                 )
-                return _window_medians(lazy, points_utm, chip_px)
             finally:
                 shutil.rmtree(dl_tmp, ignore_errors=True)
 
@@ -566,17 +679,14 @@ def _label_cluster_bbox_wgs84(
     """Compute a tight WGS84 bbox around a group of UTM label points.
 
     Adds *buffer_m* padding (half-chip) so edge labels get full chips.
-    Much smaller than the full 20 km block for sparse label clusters.
+    Used for the STAC query only — the raster bounds come from the much smaller
+    per-cell bboxes in :func:`_batched_window_medians`.
     """
-    xs = grp.geometry.x.values
-    ys = grp.geometry.y.values
-    bbox_utm = box(
-        xs.min() - buffer_m,
-        ys.min() - buffer_m,
-        xs.max() + buffer_m,
-        ys.max() + buffer_m,
+    return _points_bbox_wgs84(
+        list(zip(grp.geometry.x.values, grp.geometry.y.values, strict=True)),
+        epsg,
+        buffer_m=buffer_m,
     )
-    return gpd.GeoSeries([bbox_utm], crs=f"EPSG:{epsg}").to_crs("EPSG:4326").iloc[0]
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +709,7 @@ def _process_group(
     g_idx: int,
     n_groups: int,
     chipped_months: set[tuple[str, str]] | None = None,
+    max_scenes: int | None = None,
 ) -> list[dict]:
     """Process a single (block_id, year) group — self-contained for threading.
 
@@ -653,6 +764,7 @@ def _process_group(
             cloud_cover_max=cloud_cover_max,
             resolution_m=resolution_m,
             epsg=epsg,
+            max_scenes=max_scenes,
         )
         if results is None:
             logger.warning(
@@ -1136,6 +1248,7 @@ def extract_training_chips(
     chip_px: int = CHIP_PX,
     resolution_m: int = RESOLUTION_M,
     cloud_cover_max: int = 40,
+    max_scenes: int | None = None,
     default_year: int = 2023,
     max_workers: int = 6,
     year_fallback: bool = True,
@@ -1284,6 +1397,7 @@ def extract_training_chips(
                 g_idx,
                 n_groups,
                 chipped_months,
+                max_scenes,
             )
             futures[fut] = (int(bid), int(year))
 
@@ -1352,6 +1466,7 @@ def extract_training_chips(
                 chip_px=chip_px,
                 resolution_m=resolution_m,
                 cloud_cover_max=cloud_cover_max,
+                max_scenes=max_scenes,
                 default_year=default_year,
                 max_workers=max_workers,
                 year_fallback=False,
