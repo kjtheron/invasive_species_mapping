@@ -164,6 +164,23 @@ class TestWindowMedians:
         assert _window_medians(stack, [(cx, cy)], chip_px=4)[0].startswith("low_valid_frac")
 
 
+def test_empty_stack_skips_cell_instead_of_raising(monkeypatch) -> None:
+    """A sub-cell no scene covers is reported, not raised as a float-cast ValueError.
+
+    stackstac drops every asset whose footprint misses the bounds; the leftover
+    band index is empty *float64*, so ``.sel(band="SCL")`` used to blow up with
+    "could not convert string to float".
+    """
+    from cmrv.ingest import chips
+
+    empty = _make_stack(T=0, B=0)
+    monkeypatch.setattr(chips, "_stack_items", lambda *a, **k: empty)
+    results = chips._batched_window_medians(
+        [], [(230_040.0, 6_239_960.0)], ["B02"], chip_px=4, resolution_m=10, epsg=32734
+    )
+    assert results == ["no_scene_overlap"]
+
+
 def test_thin_labels_order_independent_and_stable() -> None:
     """Thinning survivor is the smallest obs_id per cell — independent of input order."""
     import geopandas as gpd
