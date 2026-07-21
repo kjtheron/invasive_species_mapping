@@ -33,6 +33,7 @@ Performance:
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import tempfile
@@ -101,6 +102,12 @@ MAX_COMPUTE_BYTES = 2 << 30
 # Widening to ±15d roughly doubles the candidate-scene pool per window so
 # the median can recover cloud-free pixels in cloudy months.
 WINDOW_PADDING_DAYS = 15
+
+# Staging dir for the download fallback. NOT /tmp: that is a 7.6 GB tmpfs (RAM)
+# here, and the fallback pulls full-tile assets — 11 bands x up to 20 scenes per
+# month-window, x N workers — which fills it, turns every subsequent write into
+# EDQUOT, and starves the dask workers of the same RAM.
+DL_TMP_ROOT = Path(os.environ.get("CMRV_TMPDIR", "data/tmp"))
 
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 COLLECTION = "sentinel-2-l2a"
@@ -377,6 +384,15 @@ def _download_item_assets(item, bands: list[str], tmp_dir: Path) -> dict[str, st
                 with open(dest, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=1 << 20):
                         f.write(chunk)
+            except OSError as exc:
+                # Out of space: every remaining asset will fail the same way, and
+                # the half-downloaded item set is what produced the empty stacks.
+                # Abort the whole fallback instead of grinding through hundreds.
+                if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+                    dest.unlink(missing_ok=True)
+                    raise
+                logger.warning("download failed for {} {}: {}", item.id, key, exc)
+                continue
             except Exception as exc:
                 logger.warning("download failed for {} {}: {}", item.id, key, exc)
                 continue
@@ -523,6 +539,15 @@ def _batched_window_medians(
             resolution_m=resolution_m,
             epsg=epsg,
         )
+        if stack.sizes["band"] == 0 or stack.sizes["time"] == 0:
+            # stackstac drops every (item, asset) whose footprint misses the bounds,
+            # so a sub-cell no scene covers yields a 0-band stack — and `.sel(band=
+            # "SCL")` on the resulting empty *float64* index raises the opaque
+            # "could not convert string to float: np.str_('SCL')". Skip the cell;
+            # the other cells in this month are still good.
+            for i in idx:
+                results[i] = "no_scene_overlap"
+            continue
         _check_compute_size(stack)
         for i, res in zip(idx, _window_medians(stack, pts, chip_px), strict=True):
             results[i] = res
@@ -597,7 +622,8 @@ def _compute_month(
             for item in items:
                 _strip_sas_inplace(item)
                 pc.sign_inplace(item)
-            dl_tmp = Path(tempfile.mkdtemp(prefix="s2dl_"))
+            DL_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+            dl_tmp = Path(tempfile.mkdtemp(prefix="s2dl_", dir=DL_TMP_ROOT))
             try:
                 import copy
 
@@ -789,11 +815,12 @@ def _process_group(
             continue
 
         n_written = 0
-        drops = {"oob": 0, "low_valid_frac": 0, "write_error": 0}
+        drops = {"oob": 0, "low_valid_frac": 0, "write_error": 0, "no_scene_overlap": 0}
 
         for row, result in zip(pending_rows, results, strict=True):
             if isinstance(result, str):
-                drops["oob" if result == "oob" else "low_valid_frac"] += 1
+                # result is "oob" / "no_scene_overlap" / "low_valid_frac=<f>"
+                drops[result if result in drops else "low_valid_frac"] += 1
                 continue
             arr, chip_tf, valid_frac = result
 
@@ -827,7 +854,7 @@ def _process_group(
             )
 
         logger.info(
-            "  {} {}: {}/{} chips (drops: cloud={} oob={} write_err={})",
+            "  {} {}: {}/{} chips (drops: cloud={} oob={} write_err={} no_scene_overlap={})",
             month_label,
             year,
             n_written,
@@ -835,6 +862,7 @@ def _process_group(
             drops["low_valid_frac"],
             drops["oob"],
             drops["write_error"],
+            drops["no_scene_overlap"],
         )
 
     # Persist this group's rows *after* chips are at their final location, so

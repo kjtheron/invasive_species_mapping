@@ -498,6 +498,24 @@ def infer(
 
 
 def main() -> None:
+    import sys
+    from datetime import datetime
+    from pathlib import Path
+
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    # One file per invocation: logs/cmrv_<subcommand>_<timestamp>.log
+    subcommand = next((a for a in sys.argv[1:] if not a.startswith("-")), "unknown")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"cmrv_{subcommand}_{timestamp}.log"
+    logger.add(
+        str(log_path),
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{function}:{line} - {message}",
+        enqueue=True,  # thread-safe writes from ThreadPoolExecutor workers
+    )
+    logger.info("log file: {}", log_path)
+
     tyro.extras.subcommand_cli_from_dict(
         {
             "aoi-wc": aoi_wc,

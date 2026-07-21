@@ -172,3 +172,28 @@ source is worth more than it looks.
 **How to apply:** Write the cube **complete in one pass** (emb + obs_id + coords together, as `embed_chips` now does) so no post-hoc patch is needed. If you must add to an existing store, write to a *new* path and replace, or `.load()` into memory first to break the lazy link. Re-deriving row→obs_id order to "recover" a coord-less cube is unsafe (silent label misalignment) — re-embed instead.
 
 **Why this matters:** A corrupted training cube trains on garbage with no error. The empty-fold guard in `train_head` now turns the downstream symptom (obs_id join → empty fold) into a loud failure instead of a cryptic `argmax` error.
+
+---
+
+## Never stage scratch downloads under `/tmp` here — it is a 7.6 GB tmpfs (RAM)
+
+**Rule:** The chip download-fallback wrote whole S2 tiles (11 bands × up to 20 scenes ×
+6 workers) into `tempfile.mkdtemp()`, i.e. `/tmp`, which on this box is a 7.6 GB
+**tmpfs**. It filled, every later write returned `[Errno 122] Disk quota exceeded`, and
+5.7 GB of orphaned `s2dl_*` dirs survived the kill because `shutil.rmtree` sits in a
+`finally` that SIGKILL skips. Bulk scratch goes to `DL_TMP_ROOT` (`data/tmp`, real disk,
+overridable via `CMRV_TMPDIR`), and an ENOSPC/EDQUOT write aborts the fallback instead
+of logging 200 more failures.
+
+**How to apply:** Before writing GB-scale scratch, check what filesystem the default
+temp dir actually is (`df -h /tmp`). "Temp" on a workstation often means RAM.
+
+**Why this matters:** The full-disk symptom did not surface as a disk error. Downloads
+failed one asset at a time, `_download_item_assets` dropped those items, and the
+surviving handful no longer covered every 4 km sub-cell — so `stackstac` dropped **all**
+assets for non-overlap, leaving an empty band index. pandas types an empty index as
+`float64`, so `apply_scl_mask`'s `.sel(band="SCL")` died with `ValueError: could not
+convert string to float: np.str_('SCL')` — a message pointing at band metadata, three
+layers away from the real cause. **An empty axis is now a checked case, not an
+exception:** `_batched_window_medians` marks the cell `no_scene_overlap` (counted in the
+per-month drop log) and keeps the rest of the month.
