@@ -18,3 +18,7 @@ logs/
 # Data sourcing temp
 pending_dataset_ingest.md
 dataset_lookup.csv
+
+# Project roadmaps
+tasks/
+CLAUDE.md

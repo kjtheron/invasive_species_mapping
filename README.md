@@ -134,12 +134,6 @@ uv run cmrv make-split --class-map-name western_cape_iap_genus
 
 Class definitions — which species roll up into which class — live in [configs/labels_schema.yaml](configs/labels_schema.yaml) and are the single source of truth. Adding a species to a class's `members[]` is all that's needed for the whole pipeline to pick it up.
 
-## Documentation
-
-- Architecture and conventions: [CLAUDE.md](CLAUDE.md)
-- Roadmap: [tasks/todo.md](tasks/todo.md)
-- Engineering lessons: [tasks/lessons.md](tasks/lessons.md)
-
 ## Licence and attribution
 
 Boundary data from [GeoBoundaries](https://www.geoboundaries.org) (CC-BY 4.0).
