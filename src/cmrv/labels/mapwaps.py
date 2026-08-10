@@ -232,9 +232,23 @@ def ingest_mapwaps(
     gdf = gdf.to_crs("EPSG:4326")
 
     n0 = len(gdf)
-    keep = gdf[cat.class_col].astype(str).str.strip().isin(_LULC_TO_CLASS)
+    classes = gdf[cat.class_col].astype(str).str.strip()
+    keep = classes.isin(_LULC_TO_CLASS)
+    if not keep.all():
+        # Name the classes, don't just count them: a new catchment's unknown
+        # Alien_* string is dropped here, and a bare count can't tell you whether
+        # you lost a survey artefact or a whole genus. Add real ones to
+        # _LULC_TO_CLASS (and the genus to labels_schema members[]) before ingest.
+        dropped = classes[~keep].value_counts()
+        logger.warning(
+            "{}: dropping {} rows in {} unmapped class(es): {}",
+            cat.dataset,
+            int((~keep).sum()),
+            len(dropped),
+            dropped.to_dict(),
+        )
     gdf = gdf[keep].reset_index(drop=True)
-    logger.info("{}: kept {} of {} rows (dropped unmapped)", cat.dataset, len(gdf), n0)
+    logger.info("{}: kept {} of {} rows", cat.dataset, len(gdf), n0)
 
     # Single field campaign → fill undated points with the modal date (or the
     # configured campaign date), so per-label year alignment (event_date.year) holds.

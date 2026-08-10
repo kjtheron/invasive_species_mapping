@@ -44,7 +44,9 @@ months_by_zone:
     - {start: "2023-09-01", end: "2023-09-30", label: sep}
     - {start: "2023-12-01", end: "2023-12-31", label: dec}
 
-# Province (aoi_admin1) → rainfall-seasonality zone. Unlisted → winter_rainfall (WC default).
+# Province (aoi_admin1) → rainfall-seasonality zone. An unlisted province RAISES at
+# ingest-chips — it does not default. Guessing winter_rainfall for a summer-rainfall
+# label chips the wrong calendar and nothing downstream can detect it.
 admin1_zone:
   western_cape: winter_rainfall
   kwazulu_natal: summer_rainfall
