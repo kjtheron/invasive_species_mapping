@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from shapely import get_coordinates, make_valid
-from shapely.geometry import box
+from shapely.geometry import Point, box
 from shapely.ops import unary_union
 
 GEOBOUNDARIES_API = "https://www.geoboundaries.org/api/current/gbOpen/{iso3}/{adm}/"
@@ -171,6 +171,29 @@ def province_of(points: gpd.GeoDataFrame, source: str | Path | None = None) -> p
     slug = joined[name_col].astype("string").str.strip().str.lower()
     slug = slug.str.replace(r"[ -]", "_", regex=True).replace(_ADM1_SLUG_FIXES)
     return slug.reindex(points.index)
+
+
+def months_for_geom(geom_wgs84, cfg: dict) -> tuple[str, list[dict]]:
+    """``(zone, months)`` for this box, from the province under its centroid.
+
+    Inference must use the same calendar training did. A KZN chip was embedded from
+    jul/sep/dec with day-of-year [196, 258, 349]; compositing that ground on the
+    winter feb/may/sep set would feed the head a temporal encoding it never saw for
+    that region — train/inference skew, not just different imagery. Raises rather
+    than defaulting, for the same reason ``ingest-chips`` refuses to guess a zone.
+    """
+    cx, cy = geom_wgs84.centroid.coords[0]
+    prov = province_of(gpd.GeoDataFrame(geometry=[Point(cx, cy)], crs="EPSG:4326")).iloc[0]
+    if pd.isna(prov):
+        raise ValueError(f"box centroid ({cx:.4f}, {cy:.4f}) is outside every SA province")
+    zone = cfg.get("admin1_zone", {}).get(prov)
+    if zone is None:
+        raise ValueError(f"no rainfall zone for province {prov!r} — add it to `admin1_zone`")
+    months = cfg["months_by_zone"].get(zone)
+    if months is None:
+        raise ValueError(f"no month set for zone {zone!r} — add it to `months_by_zone`")
+    logger.info("box province={} zone={} months={}", prov, zone, [m["label"] for m in months])
+    return zone, months
 
 
 def build_tile_grid(

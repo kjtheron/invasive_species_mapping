@@ -1300,11 +1300,10 @@ def _reconcile_manifest(
 def extract_training_chips(
     labels: gpd.GeoDataFrame,
     blocks: gpd.GeoDataFrame,
-    months_cfg: list[dict],
+    months_by_zone: dict[str, list[dict]],
     bands: list[str],
     out_prefix: str,
     *,
-    months_by_zone: dict[str, list[dict]] | None = None,
     default_zone: str = "winter_rainfall",
     chip_px: int = CHIP_PX,
     resolution_m: int = RESOLUTION_M,
@@ -1347,6 +1346,15 @@ def extract_training_chips(
         labels["_year"] = ed.dt.year.fillna(default_year).astype(int)
     if "_zone" not in labels.columns:
         labels["_zone"] = default_zone
+    # Every zone must have a month set. `cmrv ingest-chips` already raises on a province
+    # with no zone; this catches the other half — a zone with no calendar — before any
+    # imagery is fetched. Falling back to some other zone's months is never right.
+    unknown = sorted(set(labels["_zone"]) - set(months_by_zone))
+    if unknown:
+        raise ValueError(
+            f"no month set for zone(s) {unknown}; "
+            f"add them to `months_by_zone` (have: {sorted(months_by_zone)})"
+        )
     # Keep each label's lon/lat (labels arrive in EPSG:4326) so the manifest is
     # CRS-agnostic — chips are extracted per group in the group's native S2 UTM zone.
     if "lon" not in labels.columns:
@@ -1360,12 +1368,9 @@ def extract_training_chips(
 
     # The month set each obs *should* have, from its zone. Drives both the
     # incremental skip test and the prune of chips left behind by a regrouping.
-    _base_months = {m["label"] for m in months_cfg}
-    _zone_months = {
-        z: {m["label"] for m in ms} for z, ms in (months_by_zone or {}).items()
-    }
+    _zone_months = {z: {m["label"] for m in ms} for z, ms in months_by_zone.items()}
     expected_months: dict[str, set[str]] = {
-        oid: _zone_months.get(z, _base_months)
+        oid: _zone_months[z]
         for oid, z in zip(labels["obs_id"], labels["_zone"], strict=True)
     }
 
@@ -1466,7 +1471,7 @@ def extract_training_chips(
         futures = {}
         for g_idx, ((bid, year, zone), grp) in enumerate(groups, 1):
             # each label's month set is chosen by its rainfall zone (winter vs summer)
-            grp_months = months_by_zone.get(zone, months_cfg) if months_by_zone else months_cfg
+            grp_months = months_by_zone[zone]
             # extract this group in its OWN native S2 UTM zone (no cross-zone resampling)
             g_epsg = utm_epsg(grp["lon"].mean(), grp["lat"].mean())
             grp_utm = grp.to_crs(f"EPSG:{g_epsg}")
@@ -1547,7 +1552,6 @@ def extract_training_chips(
             manifest_df = extract_training_chips(
                 labels=fallback_labels,
                 blocks=blocks,
-                months_cfg=months_cfg,
                 months_by_zone=months_by_zone,
                 default_zone=default_zone,
                 bands=bands,

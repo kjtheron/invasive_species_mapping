@@ -89,7 +89,7 @@ def test_species_subset_run_leaves_other_species_chips_alone(tmp_path):
     out = extract_training_chips(
         labels=_labels(["euc_1"]),
         blocks=_blocks(),
-        months_cfg=MONTHS,
+        months_by_zone={"winter_rainfall": MONTHS},
         bands=["B02"],
         out_prefix=str(tmp_path),
         reconcile=False,
@@ -104,7 +104,7 @@ def test_full_run_still_prunes_stale_chips(tmp_path):
     out = extract_training_chips(
         labels=_labels(["euc_1"]),
         blocks=_blocks(),
-        months_cfg=MONTHS,
+        months_by_zone={"winter_rainfall": MONTHS},
         bands=["B02"],
         out_prefix=str(tmp_path),
         reconcile=True,
@@ -128,7 +128,6 @@ def _run(tmp, zone, monkeypatch, **kw):
     out = extract_training_chips(
         labels=_labels(["x1"], zone=zone),
         blocks=_blocks(),
-        months_cfg=WINTER,
         months_by_zone=BY_ZONE,
         bands=["B02"],
         out_prefix=str(tmp),

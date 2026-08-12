@@ -21,7 +21,7 @@ from rasterio.transform import array_bounds
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 from shapely.geometry import box as shp_box
 
-from cmrv.aoi import SA_ALBERS, utm_epsg
+from cmrv.aoi import SA_ALBERS, months_for_geom, utm_epsg
 from cmrv.embeddings.base import MONTH_DOY
 from cmrv.embeddings.head import load_head, predict_probs
 from cmrv.embeddings.universat import UniverSatEmbedder
@@ -147,9 +147,11 @@ def infer_box(
     taper; ``tta_views`` soft-averages augmented views per window (1/4/8), one batched forward.
     """
     cfg = load_config(pipeline)
-    months, bands = cfg["months"], cfg["s2_bands"]
+    geom = shp_box(*bbox)
+    bands = cfg["s2_bands"]
+    _zone, months = months_for_geom(geom, cfg)
     stack, transform, epsg = _composite_box(
-        shp_box(*bbox),
+        geom,
         year,
         months,
         bands,

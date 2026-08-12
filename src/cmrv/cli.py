@@ -225,8 +225,7 @@ def ingest_chips(
     manifest = extract_training_chips(
         labels=labels,
         blocks=blocks,
-        months_cfg=cfg["months"],
-        months_by_zone=cfg.get("months_by_zone"),
+        months_by_zone=cfg["months_by_zone"],
         bands=cfg["s2_bands"],
         out_prefix=out_prefix,
         cloud_cover_max=cfg.get("cloud_cover_max", 40),

@@ -5,44 +5,40 @@ aoi:
   infer_path: data/aoi/processed/south_africa.parquet
   tile_km: 10
   # tile/block grids build in SA Albers equal-area (see cmrv.aoi.SA_ALBERS) — national,
-  # true-square tiles country-wide; not UTM 34S (skews outside its zone).
+  # true-square tiles country-wide.
 
-# Default months — the WINTER-RAINFALL calendar (Western Cape;
-# Mediterranean — NOT the summer-rainfall calendar of most SA literature):
-#   • feb — peak dry-summer trough: evergreen Pinus/Eucalyptus/Hakea stand out
-#           against the senesced fynbos/herbaceous matrix.
-#   • may — autumn transition (non-flowering baseline; green-down).
-#   • sep — spring green-up + Acacia flowering (yellow bloom = wattle-specific).
-# Red-edge bands (B05–B07, B8A) carry most of the discriminatory signal.
+# Three phenology-tuned months per rainfall-seasonality zone. There is no default
+# calendar: a zone is resolved from the province, and an unresolved one raises.
 #
-# YYYY semantics differ by consumer:
-#   • `cmrv ingest-month` uses these dates literally (2023 stack).
-#   • `cmrv ingest-chips` substitutes each label's event_date year, so the 3
-#     windows come from the SAME year as the label (single-year phenology).
-# The temporal head masks any month that has no cloud-free composite.
-months: &winter_months
-  - {start: "2023-02-01", end: "2023-02-28", label: feb}
-  - {start: "2023-05-01", end: "2023-05-31", label: may}
-  - {start: "2023-09-01", end: "2023-09-30", label: sep}
-
-# Region-aware months for chip extraction (ingest-chips). Each label picks its set
-# from its province (aoi_admin1 → zone). infer / ingest-month keep using `months`.
-#   • winter_rainfall (WC): feb dry-summer trough / may autumn / sep spring+Acacia bloom.
-#   • summer_rainfall (KZN/EC/Limpopo/Mpumalanga): jul / sep / dec, from Masemola et al.
-#     2020 "Sentinel-2 time series … optimal features and time window for mapping invasive
-#     Acacia … KwaZulu-Natal" (Int. J. Appl. Earth Obs. Geoinf. 93, 102207). Best Acacia
-#     accuracy came from dry + flowering + growing-season imagery; jul/sep/dec each >80%:
-#       jul — dry-winter senescence: native grassland/savanna dormant & brown, evergreen
-#             Pine/Wattle/Gum (and structural canopy) stand out most.
-#       sep — Acacia (mearnsii/dealbata) flowering + early green-up — wattle-specific signal.
-#       dec — early-to-peak summer growth (Nov–mid-Mar): full-canopy red-edge separability.
-#     Red-edge bands/indices dominate discrimination (B05–B07, B8A), as in the WC set.
+# **The YYYY below is a placeholder — only the month and day are ever read.**
+#   • `cmrv ingest-chips` prepends each label's own event_date year, so the 3 windows
+#     come from the SAME year as the label (single-year phenology).
+#   • `cmrv infer` prepends its --year argument.
+# Red-edge bands (B05–B07, B8A) carry most of the discriminatory signal in both sets.
+# The temporal head masks any month with no cloud-free composite.
 months_by_zone:
-  winter_rainfall: *winter_months
+  # Western Cape / Northern Cape — Mediterranean winter rainfall, NOT the
+  # summer-rainfall calendar of most SA literature.
+  #   feb — peak dry-summer trough: evergreen Pinus/Eucalyptus/Hakea stand out
+  #         against the senesced fynbos/herbaceous matrix.
+  #   may — autumn transition (non-flowering baseline; green-down).
+  #   sep — spring green-up + Acacia flowering (yellow bloom = wattle-specific).
+  winter_rainfall:
+    - {start: "0000-02-01", end: "0000-02-28", label: feb}
+    - {start: "0000-05-01", end: "0000-05-31", label: may}
+    - {start: "0000-09-01", end: "0000-09-30", label: sep}
+  # KZN / EC / Limpopo / Mpumalanga / NW / FS / Gauteng — from Masemola et al. 2020,
+  # "Sentinel-2 time series … optimal features and time window for mapping invasive
+  # Acacia … KwaZulu-Natal" (Int. J. Appl. Earth Obs. Geoinf. 93, 102207). Best Acacia
+  # accuracy came from dry + flowering + growing-season imagery; jul/sep/dec each >80%:
+  #   jul — dry-winter senescence: native grassland/savanna dormant & brown, evergreen
+  #         Pine/Wattle/Gum (and structural canopy) stand out most.
+  #   sep — Acacia (mearnsii/dealbata) flowering + early green-up — wattle-specific.
+  #   dec — early-to-peak summer growth (Nov–mid-Mar): full-canopy red-edge separability.
   summer_rainfall:
-    - {start: "2023-07-01", end: "2023-07-31", label: jul}
-    - {start: "2023-09-01", end: "2023-09-30", label: sep}
-    - {start: "2023-12-01", end: "2023-12-31", label: dec}
+    - {start: "0000-07-01", end: "0000-07-31", label: jul}
+    - {start: "0000-09-01", end: "0000-09-30", label: sep}
+    - {start: "0000-12-01", end: "0000-12-31", label: dec}
 
 # Province (aoi_admin1) → rainfall-seasonality zone. An unlisted province RAISES at
 # ingest-chips — it does not default. Guessing winter_rainfall for a summer-rainfall

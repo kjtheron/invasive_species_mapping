@@ -32,6 +32,46 @@ def test_all_zones_same_month_count() -> None:
     assert len(counts) == 1, f"zones have differing month counts {counts} — breaks uniform T"
 
 
-def test_default_months_match_winter_zone() -> None:
-    # `months` (used by infer / ingest-month) is the winter-rainfall set via a YAML anchor.
-    assert CFG["months"] == CFG["months_by_zone"]["winter_rainfall"]
+def test_no_default_month_set() -> None:
+    # There is no top-level `months`: every consumer resolves a zone first, so a
+    # default calendar could only ever be the wrong one for half the country.
+    assert "months" not in CFG
+
+
+def test_month_year_is_a_placeholder() -> None:
+    # Both consumers slice the year off and prepend their own (label year / --year).
+    for months in CFG["months_by_zone"].values():
+        for m in months:
+            assert m["start"].startswith("0000-"), m
+            assert m["end"].startswith("0000-"), m
+
+
+def test_months_for_geom_picks_the_province_calendar() -> None:
+    """Inference must composite on the same calendar its training chips used.
+
+    A KZN chip was embedded from jul/sep/dec (day-of-year 196/258/349). Compositing
+    that ground on the winter feb/may/sep set feeds the head a temporal encoding it
+    never saw for that region — skew, not just different imagery.
+    """
+    from shapely.geometry import box
+
+    from cmrv.aoi import months_for_geom
+
+    assert months_for_geom(box(18.4, -34.0, 18.6, -33.8), CFG)[0] == "winter_rainfall"  # Cape Town
+    assert months_for_geom(box(30.9, -29.9, 31.1, -29.7), CFG)[0] == "summer_rainfall"  # Durban
+    assert [m["label"] for m in months_for_geom(box(30.9, -29.9, 31.1, -29.7), CFG)[1]] == [
+        "jul",
+        "sep",
+        "dec",
+    ]
+
+
+def test_months_for_geom_raises_outside_sa() -> None:
+    """Refuse to guess, exactly as ingest-chips does for an unmapped province."""
+    import pytest
+    from shapely.geometry import box
+
+    from cmrv.aoi import months_for_geom
+
+    with pytest.raises(ValueError, match="outside every SA province"):
+        months_for_geom(box(0.0, 0.0, 0.1, 0.1), CFG)
