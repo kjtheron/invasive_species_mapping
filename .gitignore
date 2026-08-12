@@ -16,8 +16,8 @@ data/**
 logs/
 
 # Data sourcing temp
-pending_dataset_ingest.md
 dataset_lookup.csv
+dataset_lookup_international.csv
 
 # Project roadmaps
 tasks/
