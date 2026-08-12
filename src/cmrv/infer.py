@@ -1,6 +1,6 @@
 """Wall-to-wall inference — apply the frozen head densely → class / confidence / OOD COG.
 
-A lon/lat box → 3-month S2 composite → UniverSat **dense** token grid (per 64×64
+A lon/lat box → 3-month S2 composite → UniverSat **dense** token grid (per 64x64
 window) → frozen head per token → per-pixel ``class_id`` + confidence + Mahalanobis
 OOD score → 3-band georeferenced COG. Same encoder and per-token representation as
 training (the center token the head learned), applied to *every* token.
@@ -15,11 +15,11 @@ projection — mosaic to a common CRS downstream.
 from __future__ import annotations
 
 import numpy as np
-from loguru import logger
-from rasterio.crs import CRS as RioCRS
-from rasterio.transform import array_bounds
-from rasterio.warp import Resampling, calculate_default_transform, reproject
-from shapely.geometry import box as shp_box
+from loguru import logger  # type: ignore
+from rasterio.crs import CRS as RioCRS  # type: ignore
+from rasterio.transform import array_bounds  # type: ignore
+from rasterio.warp import Resampling, calculate_default_transform, reproject  # type: ignore
+from shapely.geometry import box as shp_box  # type: ignore
 
 from cmrv.aoi import SA_ALBERS, months_for_geom, utm_epsg
 from cmrv.embeddings.constants import MONTH_DOY
@@ -68,7 +68,7 @@ def _d4_ops(n_views: int):
     """The first ``n_views`` dihedral augmentations as ``(fwd, inv)`` pairs.
 
     Ordered so **1 = identity** (no TTA), **4 = the four 90° rotations**, **8 = the full
-    D4 group** (rotations × flips). ``fwd`` transforms an input's spatial last-2 axes;
+    D4 group** (rotations x flips). ``fwd`` transforms an input's spatial last-2 axes;
     ``inv`` applies the inverse to a prediction's first-2 axes, bringing probs back to the
     original frame. Land cover is flip/rotation-invariant, so averaging the views
     (soft-voting) de-noises the prediction.
@@ -159,7 +159,7 @@ def infer_box(
         cfg.get("max_scenes_per_composite"),
     )
     t, c, h, w = stack.shape
-    logger.info("box composite: {} months × {} bands × {}×{} px @ EPSG:{}", t, c, h, w, epsg)
+    logger.info("box composite: {} months x {} bands x {}x{} px @ EPSG:{}", t, c, h, w, epsg)
 
     model, mu, sd, classes, ood = load_head(ckpt_path)
     enc = UniverSatEmbedder(pool="center", output_grid=CHIP_PX, device=device, batch=4)
@@ -210,11 +210,11 @@ def infer_box(
 
     crs = f"EPSG:{epsg}"
     if out_crs:  # warp native-zone map → national CRS so tiles mosaic into one grid
-        out, transform, dst = _reproject_triplet(out, transform, epsg, out_crs)
+        out, transform, dst = _reproject_triplet(out, transform, epsg, out_crs)  # type: ignore
         crs = dst.to_string()
     write_cog(out, transform, crs, out_uri, dtype="uint8", nodata=NODATA)
     logger.success(
-        "wrote class/confidence/OOD COG ({}×{}, {} classes) @ {} → {}",
+        "wrote class/confidence/OOD COG ({}x{}, {} classes) @ {} → {}",
         out.shape[1],
         out.shape[2],
         k,

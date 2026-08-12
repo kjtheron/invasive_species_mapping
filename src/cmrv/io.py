@@ -11,14 +11,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import geopandas as gpd
+import geopandas as gpd  # type: ignore
 import numpy as np
-import pandas as pd
-import rasterio
+import pandas as pd  # type: ignore
+import rasteriov  # type: ignore
 import yaml
-from rasterio.crs import CRS
-from rio_cogeo.cogeo import cog_translate
-from rio_cogeo.profiles import cog_profiles
+from rasterio.crs import CRS  # type: ignore
+from rio_cogeo.cogeo import cog_translate  # type: ignore
+from rio_cogeo.profiles import cog_profiles  # type: ignore
 
 
 def ensure_parent(uri: str) -> None:
@@ -46,7 +46,7 @@ def list_parquet_files(root: str, *, recursive: bool = False) -> list[str]:
 
 def write_cog(
     arr: np.ndarray,
-    transform: rasterio.transform.Affine,
+    transform: rasterio.transform.Affine,  # type: ignore
     crs: str | CRS,
     out_uri: str,
     *,
@@ -68,7 +68,7 @@ def write_cog(
         raw_tif = str(Path(tmp) / "raw.tif")
         cog_tif = str(Path(tmp) / "cog.tif")
 
-        with rasterio.open(
+        with rasterio.open(  # type: ignore
             raw_tif,
             "w",
             driver="GTiff",

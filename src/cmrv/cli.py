@@ -5,9 +5,9 @@ Phase 0 is local-first: all artifacts live under ``data/`` (see CLAUDE.md).
 
 from __future__ import annotations
 
-import geopandas as gpd
-import tyro
-from loguru import logger
+import geopandas as gpd  # type: ignore
+import tyro  # type: ignore
+from loguru import logger  # type: ignore
 
 from cmrv.aoi import SA_ALBERS, build_tile_grid, fetch_provinces
 from cmrv.ingest.chips import (
@@ -72,7 +72,7 @@ def aoi_tiles(
     --aoi defaults to ``aoi.infer_path`` (the delivered map's extent, not the training one).
     """
     aoi = aoi or load_config(pipeline)["aoi"]["infer_path"]
-    gdf = read_gdf(aoi)
+    gdf = read_gdf(aoi)  # type: ignore
     tiles = build_tile_grid(gdf, tile_km=km, crs=crs)
     logger.info("built {} tiles of {} km", len(tiles), km)
     write_gdf_parquet(tiles, out)
@@ -166,7 +166,7 @@ def ingest_chips(
     """Extract temporally-aligned training chips for label points (Stage 2b).
 
     Pipeline: load labels → **spatial-thin (before any imagery)** → group into
-    spatial blocks → extract a 64×64 px (10 m) chip per (label, month). No fold
+    spatial blocks → extract a 64x64 px (10 m) chip per (label, month). No fold
     assignment — that's done at training time via ``cmrv make-split``.
 
     Manifest-based incremental extraction — existing chips are skipped, so it's
@@ -181,7 +181,7 @@ def ingest_chips(
     aoi = aoi or cfg["aoi"]["train_path"]
 
     labels = load_training_labels(
-        aoi_uri=aoi,
+        aoi_uri=aoi,  # type: ignore
         root=root,
         max_coord_uncertainty_m=max_coord_uncertainty_m,
         date_min=date_min,
@@ -213,7 +213,7 @@ def ingest_chips(
     # Thin BEFORE fetching imagery so we never download chips we'd discard.
     labels = thin_labels(labels, thin_m=thin_m)
 
-    aoi_gdf = read_gdf(aoi)
+    aoi_gdf = read_gdf(aoi)  # type: ignore
     blocks = build_spatial_blocks(aoi_gdf, block_km=block_km)
 
     blocks_wgs = blocks[["block_id", "geometry"]].to_crs("EPSG:4326")
@@ -261,7 +261,7 @@ def chips_make_split(
 
     Reads the manifest, optionally filters to a species subset, assigns spatial
     blocks to train/val/test folds via iterative stratification (whole blocks, no
-    leakage; each class spread across folds), and writes split files. Obs with 1–3
+    leakage; each class spread across folds), and writes split files. Obs with 1-3
     of the configured months are all kept (the temporal head masks missing months);
     thinning already happened at ``ingest-chips`` time.
 
@@ -279,7 +279,7 @@ def chips_make_split(
     aoi = aoi or load_config(pipeline)["aoi"]["train_path"]
     result = make_split(
         manifest_uri=manifest,
-        aoi_uri=aoi,
+        aoi_uri=aoi,  # type: ignore
         species=species,
         class_map_name=class_map_name,
         schema_path=schema_path,
@@ -303,7 +303,7 @@ def chips_make_split(
     fold_order = ["train", "val", "test"]
 
     print()
-    print("=== Fold × species (obs_id counts) ===")
+    print("=== Fold x species (obs_id counts) ===")
     sp_table = obs_only.groupby(["fold", "species"]).size().unstack(fill_value=0)
     sp_table = sp_table.reindex([f for f in fold_order if f in sp_table.index])
     sp_table["TOTAL"] = sp_table.sum(axis=1)
@@ -311,7 +311,7 @@ def chips_make_split(
 
     if "class_id" in obs_only.columns and obs_only["class_id"].notna().any():
         print()
-        print("=== Fold × class_id (obs_id counts) ===")
+        print("=== Fold x class_id (obs_id counts) ===")
         cls_table = (
             obs_only.dropna(subset=["class_id"])
             .assign(class_id=lambda d: d["class_id"].astype(int))
@@ -353,11 +353,11 @@ def chips_stats(
     top_species: int = 30,
     top_blocks: int = 10,
 ) -> None:
-    """Print species × spatial × temporal stats for a chip manifest.
+    """Print species x spatial x temporal stats for a chip manifest.
 
     Reads ``manifest.parquet`` and reports total chips / obs_ids / species /
     extent, top-N species, month-completeness, densest blocks,
-    spatially-dominated species, fold × species (if ``make-split`` has run),
+    spatially-dominated species, fold x species (if ``make-split`` has run),
     and obs_ids per chip year. No schema or class_map needed.
     """
     from cmrv.ingest.stats import chip_stats
@@ -434,7 +434,7 @@ def infer(
     → frozen head per token (the center-token rep, applied to every token),
     overlap-blended into a seamless class/confidence/OOD COG. Needs the ``embed`` group
     + a saved head (``train-head --save``). --tta-views soft-averages augmented views
-    (1 = off, 4 = rotations, 8 = full D4 flips+rotations); ~N× slower.
+    (1 = off, 4 = rotations, 8 = full D4 flips+rotations); ~Nx slower.
     """
     from cmrv.infer import infer_box
 

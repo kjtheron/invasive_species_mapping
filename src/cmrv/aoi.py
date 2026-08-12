@@ -12,13 +12,13 @@ import json
 import urllib.request
 from pathlib import Path
 
-import geopandas as gpd
-import numpy as np
-import pandas as pd
-from loguru import logger
-from shapely import get_coordinates, make_valid
-from shapely.geometry import Point, box
-from shapely.ops import unary_union
+import geopandas as gpd  # type: ignore
+import numpy as np  # type: ignore
+import pandas as pd  # type: ignore
+from loguru import logger  # type: ignore
+from shapely import get_coordinates, make_valid  # type: ignore
+from shapely.geometry import Point, box  # type: ignore
+from shapely.ops import unary_union  # type: ignore
 
 GEOBOUNDARIES_API = "https://www.geoboundaries.org/api/current/gbOpen/{iso3}/{adm}/"
 GEOBOUNDARIES_RAW = (
@@ -216,7 +216,7 @@ def build_tile_grid(
     step = tile_km * 1000.0
     xs = np.arange(minx, maxx, step)
     ys = np.arange(miny, maxy, step)
-    tiles = [box(x, y, x + step, y + step) for x in xs for y in ys]
+    tiles = [box(x, y, x + step, y + step) for x in xs for y in ys]  # type: ignore
     grid = gpd.GeoDataFrame({"tile_id": range(len(tiles))}, geometry=tiles, crs=crs)
     aoi_union = unary_union(aoi_m.geometry)
     tile_area = step * step
