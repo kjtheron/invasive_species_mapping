@@ -1,9 +1,8 @@
 """SANLC accuracy-assessment points + VegMap 2024 → land-cover training labels.
 
 The SANLC 2018/2020/2022 **accuracy-assessment points** are field/reference-verified
-land-cover reference data — the truth used to *validate* the SANLC maps. They are
-far better training labels than sampling the SANLC raster (which is the model's own
-prediction). Each point carries a year, slotting into per-label imagery-year
+land-cover reference data — the truth used to *validate* the SANLC maps.
+Each point carries a year, slotting into per-label imagery-year
 alignment (2018→2018 S2, …).
 
 Pipeline: load all years → map each point's land-cover class to our scheme via
@@ -24,10 +23,10 @@ import datetime as dt
 import glob
 from pathlib import Path
 
-import geopandas as gpd
-import pandas as pd
-import pyogrio
-from loguru import logger
+import geopandas as gpd  # type: ignore
+import pandas as pd  # type: ignore
+import pyogrio  # type: ignore
+from loguru import logger  # type: ignore
 
 from cmrv.aoi import SA_ALBERS, province_of
 from cmrv.io import load_config, read_gdf
@@ -133,7 +132,7 @@ def _vegmap_biome(points: gpd.GeoDataFrame) -> pd.Series:
     vcrs = pyogrio.read_info(str(VEGMAP_SHP))["crs"]
     bbox = tuple(points.to_crs(vcrs).total_bounds)
     veg = gpd.read_file(str(VEGMAP_SHP), bbox=bbox, columns=["T_BIOME"])
-    joined = gpd.sjoin(points.to_crs(veg.crs), veg, how="left", predicate="within")
+    joined = gpd.sjoin(points.to_crs(veg.crs), veg, how="left", predicate="within") # type: ignore
     joined = joined[~joined.index.duplicated(keep="first")]  # edge: a point in >1 polygon
     return joined["T_BIOME"].map(BIOME_TO_CLASS).reindex(points.index)
 
@@ -202,7 +201,7 @@ def ingest_sanlc(
         natural = cls in NATURAL_CLASSES
         rows.append(
             {
-                "obs_id": f"{SOURCE}:{geom.x:.6f}:{geom.y:.6f}:{yr}",
+                "obs_id": f"{SOURCE}:{geom.x:.6f}:{geom.y:.6f}:{yr}", # type: ignore
                 "source": SOURCE,
                 "source_record_id": str(i),
                 "source_url": VEGMAP_URL if natural else SANLC_URL,

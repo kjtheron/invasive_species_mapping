@@ -9,9 +9,9 @@
 
 from __future__ import annotations
 
-import geopandas as gpd
-import pandas as pd
-from loguru import logger
+import geopandas as gpd  # type: ignore
+import pandas as pd  # type: ignore
+from loguru import logger  # type: ignore
 
 from cmrv.io import read_gdf
 from cmrv.labels.observations import PROCESSED_ROOT, read_all

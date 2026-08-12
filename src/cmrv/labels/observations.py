@@ -17,14 +17,14 @@ import datetime as dt
 import os
 from pathlib import Path
 
-import geopandas as gpd
-import pandas as pd
-from loguru import logger
+import geopandas as gpd  # type: ignore
+import pandas as pd  # type: ignore
+from loguru import logger  # type: ignore
 
 from cmrv.io import ensure_parent, list_parquet_files, write_parquet_df
 
 PROCESSED_ROOT = "data/labels/processed"
-# One partition directory per source dataset (mirrors data/labels/raw/<dataset>/).
+
 KNOWN_DATASETS = frozenset(
     {
         "mapwaps_olifants_doring",

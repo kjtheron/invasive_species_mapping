@@ -6,9 +6,9 @@ both ``cmrv.ingest.chips`` (training chips) and ``cmrv.infer`` (wall-to-wall inf
 
 from __future__ import annotations
 
-import rasterio
-import xarray as xr
-from rasterio.transform import from_bounds
+import rasterio  # type: ignore
+import xarray as xr  # type: ignore
+from rasterio.transform import from_bounds  # type: ignore
 
 
 def monthly_median(da: xr.DataArray) -> xr.DataArray:

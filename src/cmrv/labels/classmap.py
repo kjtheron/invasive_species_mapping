@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
+from loguru import logger  # type: ignore
 
 from cmrv.io import load_config
 

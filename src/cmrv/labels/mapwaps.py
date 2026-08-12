@@ -32,9 +32,9 @@ import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
 
-import geopandas as gpd
-import pandas as pd
-from loguru import logger
+import geopandas as gpd  # type: ignore
+import pandas as pd  # type: ignore
+from loguru import logger  # type: ignore
 
 from cmrv.aoi import province_of
 from cmrv.labels.classmap import warn_unmapped
@@ -163,7 +163,7 @@ def _lulc_to_taxon(lulc: str) -> tuple[str | None, str]:
 
 def _density_to_cover(d: object) -> float | None:
     """Density (%) → cover_pct. ``0 → None`` (ambiguous: low vs not recorded)."""
-    if pd.isna(d):
+    if pd.isna(d): # type: ignore
         return None
     val = float(d)  # type: ignore[arg-type]
     return val if val > 0 else None
@@ -171,7 +171,7 @@ def _density_to_cover(d: object) -> float | None:
 
 def _clean_date(v: object) -> str | None:
     """Survey date → ISO date string; drop the 1899-12-30 Excel-null sentinel."""
-    ts = pd.to_datetime(v, errors="coerce")
+    ts = pd.to_datetime(v, errors="coerce") # type: ignore
     if pd.isna(ts) or ts.year < 1990:
         return None
     return ts.date().isoformat()

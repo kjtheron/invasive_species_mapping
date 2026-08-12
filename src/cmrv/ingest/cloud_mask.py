@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import xarray as xr
+import xarray as xr  # type: ignore
 
 # SCL values that indicate unusable pixels.
 # 0 = no-data, 1 = saturated/defective, 3 = cloud shadow, 8 = cloud medium

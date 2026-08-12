@@ -1,4 +1,4 @@
-"""Chip-manifest exploration: species × spatial × temporal distribution.
+"""Chip-manifest exploration: species x spatial x temporal distribution.
 
 Single source of truth for "what's in my chips": reads ``manifest.parquet``
 from a chip-extraction run and prints summary tables to stdout.  No schema,
@@ -8,7 +8,7 @@ got chipped, and class assignment lives downstream at ``make-split`` time.
 
 from __future__ import annotations
 
-from loguru import logger
+from loguru import logger  # type: ignore
 
 from cmrv.io import read_parquet_df
 
@@ -27,7 +27,7 @@ def chip_stats(
     top_species: int = 30,
     top_blocks: int = 10,
 ) -> None:
-    """Print species × spatial × temporal stats from a chip manifest.
+    """Print species x spatial x temporal stats from a chip manifest.
 
     Parameters
     ----------
