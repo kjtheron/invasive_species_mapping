@@ -20,10 +20,6 @@ All MapWAPS catchments CC-BY 4.0 (Olifants-Doring also flags CC-BY-SA ambiguity)
 > `TrainingData.zip` contains only a metadata PDF and an empty folder (no shapefile).
 > Both are wired in `download/mapwaps.py`'s registry; re-enable if the authors re-upload.
 
-> iNaturalist project points were evaluated and **dropped**: the public API
-> returns geoprivacy-obscured coordinates (~29 km), unusable for pixel-level
-> training. Re-add only via authenticated curator export.
-
 ## Run
 
 ```bash
@@ -32,8 +28,8 @@ python3 download/mapwaps.py mapwaps_tugela      # one catchment
 ```
 
 Only the field **TrainingData** + metadata are fetched; the large `AlienMap_*`
-rasters (the RF prediction map — not a training label) are skipped. Stdlib only
-(no project venv, no API key). Then `uv run cmrv labels-mapwaps-ingest` (all catchments).
+rasters (the RF prediction map — not a training label) are skipped. 
+Then `uv run cmrv labels-mapwaps-ingest` (all catchments).
 
 ## Pipeline after raw download
 

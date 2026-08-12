@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Download MapWAPS invasive-alien-plant field training data (SA catchments).
 
-Source : Cogill L., Skosana T., Rebelo A.J. et al. (2024–2025), Stellenbosch
+Source : Cogill L., Skosana T., Rebelo A.J. et al. (2024-2025), Stellenbosch
          University / figshare (SUNScholar). All catchments CC-BY 4.0.
 
 Each figshare article carries three things: a **field TrainingData** shapefile
@@ -13,7 +13,7 @@ skipped (large, and not training signal). Raw lands in
 
 Run:  python3 download/mapwaps.py                       # every catchment
       python3 download/mapwaps.py mapwaps_tugela ...    # named subset
-Idempotent: files whose md5 already matches are skipped. Stdlib only (no venv).
+Idempotent: files whose md5 already matches are skipped.
 """
 
 from __future__ import annotations
