@@ -23,7 +23,8 @@ import xarray as xr
 from loguru import logger
 from torch.utils.data import DataLoader, Dataset
 
-from cmrv.embeddings.base import MONTH_DOY, Embedder
+from cmrv.embeddings.constants import MONTH_DOY
+from cmrv.embeddings.universat import UniverSatEmbedder
 
 
 def _load_stack(uris: list[str], scale: float) -> np.ndarray:
@@ -52,7 +53,7 @@ class _ChipDataset(Dataset):
 def embed_chips(
     manifest_uri: str,
     out_uri: str,
-    encoder: Embedder,
+    encoder: UniverSatEmbedder,
     *,
     min_months: int = 3,
     scale: float = 1.0 / 10000,

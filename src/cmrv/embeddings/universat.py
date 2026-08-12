@@ -12,11 +12,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from cmrv.embeddings.base import Embedder
 
-
-class UniverSatEmbedder(Embedder):
-    name = "universat"
+class UniverSatEmbedder:
 
     def __init__(
         self,

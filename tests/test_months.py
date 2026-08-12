@@ -7,7 +7,7 @@ non-existent zone, or zones with differing month counts (breaks the uniform-T ba
 
 from __future__ import annotations
 
-from cmrv.embeddings.base import MONTH_DOY
+from cmrv.embeddings.constants import MONTH_DOY
 from cmrv.io import load_config
 
 CFG = load_config("configs/pipeline.yaml")

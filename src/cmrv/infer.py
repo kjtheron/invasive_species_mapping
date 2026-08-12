@@ -22,7 +22,7 @@ from rasterio.warp import Resampling, calculate_default_transform, reproject
 from shapely.geometry import box as shp_box
 
 from cmrv.aoi import SA_ALBERS, months_for_geom, utm_epsg
-from cmrv.embeddings.base import MONTH_DOY
+from cmrv.embeddings.constants import MONTH_DOY
 from cmrv.embeddings.head import load_head, predict_probs
 from cmrv.embeddings.universat import UniverSatEmbedder
 from cmrv.ingest.chips import _query_items, _stac_client, _stack_items

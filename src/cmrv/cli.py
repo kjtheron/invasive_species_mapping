@@ -406,7 +406,7 @@ def train_head(
 ) -> None:
     """Train a light head on frozen embeddings + report per-class test metrics.
 
-    --arch: ``linear`` (bakeoff baseline) or ``mlp`` (1 hidden layer).
+    --arch: ``linear`` (the adopted head — beat MLP on the current set) or ``mlp``.
     --weight: ``balanced`` (N/(K·n_c)), ``sqrt`` (gentler), or ``none``. Computed
               live from the train fold, so it tracks label updates automatically.
     --save: checkpoint path (weights + mu/sd + class ids) for `cmrv infer`.

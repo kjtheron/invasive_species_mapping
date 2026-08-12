@@ -1,4 +1,4 @@
-"""Tests for the embedding stage: RawStats baseline, embed_chips, train_head."""
+"""Tests for the embedding stage: embed_chips, train_head."""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ import numpy as np
 import pytest
 
 pytest.importorskip("torch")  # train_head is torch; needs the `embed` dependency group
-
-from cmrv.embeddings import RawStatsEmbedder
 
 
 def _synthetic(n_per_class: int = 10, n_groups: int = 4):
@@ -25,12 +23,6 @@ def _synthetic(n_per_class: int = 10, n_groups: int = 4):
     return np.stack(stacks), dates, np.array(y), np.array(groups)
 
 
-def test_rawstats_embed_shape() -> None:
-    stacks, dates, _y, _g = _synthetic()
-    X = RawStatsEmbedder().embed(stacks, dates)
-    assert X.shape == (len(stacks), 2 * 3 * 10)  # mean+std over (T=3, C=10)
-    assert np.isfinite(X).all()
-
 
 def test_embed_chips_writes_keyed_zarr(tmp_path):
     """embed_chips streams the manifest → a Zarr keyed by obs_id + block_id."""
@@ -38,7 +30,6 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
     import rasterio
     import xarray as xr
 
-    from cmrv.embeddings.base import Embedder
     from cmrv.embeddings.embed import embed_chips
 
     months = ("feb", "may", "sep")
@@ -64,8 +55,8 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
             )
     pd.DataFrame(rows).to_parquet(tmp_path / "manifest.parquet")
 
-    class _Stub(Embedder):
-        name = "stub"
+    class _Stub:
+        """Duck-typed stand-in for UniverSatEmbedder — embed_chips only calls .embed()."""
 
         def embed(self, stacks, dates):
             return np.zeros((len(stacks), 768), dtype="float32")
