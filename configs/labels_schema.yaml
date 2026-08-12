@@ -1,18 +1,14 @@
-# Label schema for Phase 0 (Lens A — Invasive Alien Plants).
+# Label schema for Invasive Alien Tree mapping
 #
 # Class IDs are stable integers. ``class_id`` is NEVER assigned at ingest —
 # training subsets crosswalk (species_normalized → class_id) via
 # class_maps.<name>.<id>.members[] below, applied at `cmrv make-split` time.
 #
 # One national map: sa_landcover. Native biomes (VegMap T_BIOME) + transformed
-# classes (SANLC accuracy points) are explicit alongside the alien genera, so
-# every pixel is classified rather than thresholded against an OOD score.
+# classes (SANLC accuracy points) are explicit alongside the alien genera.
 #
 # Single source of truth: each class lists its ``members`` — the strings an adapter
-# actually emits as ``species_normalized``. Today every source has a closed
-# vocabulary, so those are bare genera (Pinus, Acacia) and biome / land-cover
-# tokens. ``genus_fallback: true`` also catches any binomial in ``genus``, which
-# matters only once a species-level source is ingested.
+# actually emits as ``species_normalized``.
 # ----------------------------------------------------------------------------
 
 nodata: 255
@@ -28,8 +24,7 @@ class_maps:
   # --------------------------------------------------------------------------
   # Unified land-cover map: IAP genera (field) + native biomes (VegMap T_BIOME)
   # + transformed/other (collapsed SANLC accuracy-point classes). Every pixel
-  # classified → seamless map. Biome + transformed labels come from
-  # `cmrv labels-sanlc-ingest`; their members are the strings that adapter emits.
+  # classified → seamless map.
   sa_landcover:
     # --- alien invasive genera (MapWAPS Alien_* classes) ---
     # ``members`` is the exact string the adapter emits; ``genus_fallback`` also
@@ -60,13 +55,5 @@ class_maps:
     19: {name: renosterveld,    members: ["renosterveld"]}   # own class (was folded into fynbos)
     20: {name: savanna,         members: ["savanna"]}        # native woody: MapWAPS Indigenous Bush_*
     21: {name: populus_spp,   members: ["Populus"],    genus_fallback: true, genus: populus}
-    # --- added 2026-08-12: MapWAPS classes previously dropped at ingest ---
-    # burnt is a real cover state, not noise. Post-fire fynbos/grassland takes years
-    # to return to its pre-fire spectrum, and the 3-month stack lands inside that
-    # window — char, then pioneer green-up — which is exactly what separates it from
-    # mature veg. Variation across the stack is the class's signature, not a defect.
-    # Residual risk is fire *age*: event_date says when the point was surveyed, not
-    # when it burned, so 1-month-old and 2-year-old scars carry the same label.
-    # Watch for it absorbing `bare` / recently-cultivated at the old end.
     22: {name: burnt,           members: ["burnt"]}
     23: {name: bracken,         members: ["bracken"]}   # Pteridium aquilinum — native
