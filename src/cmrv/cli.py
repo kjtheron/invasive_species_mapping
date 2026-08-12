@@ -224,7 +224,6 @@ def ingest_chips(
 
     manifest = extract_training_chips(
         labels=labels,
-        blocks=blocks,
         months_by_zone=cfg["months_by_zone"],
         bands=cfg["s2_bands"],
         out_prefix=out_prefix,

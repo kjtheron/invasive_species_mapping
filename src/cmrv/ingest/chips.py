@@ -60,27 +60,27 @@ os.environ["GDAL_HTTP_MERGE_CONSECUTIVE_RANGES"] = "YES"  # coalesce nearby byte
 os.environ["VSI_CACHE"] = "TRUE"  # cache COG blocks across the ~30-scene median
 os.environ["GDAL_CACHEMAX"] = "512"  # MB block cache
 
-import dask
-import geopandas as gpd
+import dask  # type: ignore
+import geopandas as gpd  # type: ignore
 import numpy as np
-import pandas as pd
-import planetary_computer as pc
-import pystac_client
-import rasterio
-import stackstac
-import xarray as xr
-from loguru import logger
-from rasterio.crs import CRS
-from rasterio.transform import rowcol
-from rasterio.windows import Window
-from rasterio.windows import transform as window_transform
-from shapely.geometry import box
-from shapely.ops import unary_union
+import pandas as pd  # type: ignore
+import planetary_computer as pc  # type: ignore
+import pystac_client  # type: ignore
+import rasterio  # type: ignore
+import stackstac  # type: ignore
+import xarray as xr  # type: ignore
+from loguru import logger  # type: ignore
+from rasterio.crs import CRS  # type: ignore
+from rasterio.transform import rowcol  # type: ignore
+from rasterio.windows import Window  # type: ignore
+from rasterio.windows import transform as window_transform  # type: ignore
+from shapely.geometry import box  # type: ignore
+from shapely.ops import unary_union  # type: ignore
 
 from cmrv.aoi import SA_ALBERS, utm_epsg
 from cmrv.ingest.cloud_mask import apply_scl_mask
 from cmrv.ingest.composite import _transform_from_da, monthly_median
-from cmrv.io import ensure_parent, read_parquet_df, write_parquet_df
+from cmrv.io import read_parquet_df, write_parquet_df
 
 CHIP_PX = 64
 RESOLUTION_M = 10
@@ -96,7 +96,7 @@ BLOCK_KM = 10
 # constant the CODE picks, not one the label density picks. See _subcell_batches.
 SUBCELL_M = 4000.0
 # Hard ceiling on bytes materialised by one compute call — a loud failure beats an
-# OOM four hours in. ~1.1 GB at 4 km × 11 bands × 20 scenes leaves margin for 6 workers.
+# OOM four hours in. ~1.1 GB at 4 km x 11 bands x 20 scenes leaves margin for 6 workers.
 MAX_COMPUTE_BYTES = 2 << 30
 # Default ±days padding around each calendar-month window (chips only).
 # Widening to ±15d roughly doubles the candidate-scene pool per window so
@@ -136,7 +136,7 @@ def build_spatial_blocks(
     step = block_km * 1000.0
     xs = np.arange(minx, maxx, step)
     ys = np.arange(miny, maxy, step)
-    cells = [box(x, y, x + step, y + step) for x in xs for y in ys]
+    cells = [box(x, y, x + step, y + step) for x in xs for y in ys] # type: ignore
     grid = gpd.GeoDataFrame({"block_id": range(len(cells))}, geometry=cells, crs=crs)
     aoi_union = unary_union(aoi_m.geometry)
     overlap = grid.intersection(aoi_union).area
@@ -181,7 +181,7 @@ def stratified_spatial_split(
     if "index_right" in labels.columns:
         labels = labels.drop(columns=["index_right"])
 
-    # block × class count matrix; desired[fold] = each fold's remaining per-class quota
+    # block x class count matrix; desired[fold] = each fold's remaining per-class quota
     mat = labels.groupby(["block_id", species_col]).size().unstack(fill_value=0)
     desired = {f: mat.sum(axis=0) * fr for f, fr in folds.items()}
     desired_total = {f: float(mat.values.sum()) * fr for f, fr in folds.items()}
@@ -193,8 +193,8 @@ def stratified_spatial_split(
     for bid in locked:
         f = existing_block_folds[bid]
         block_to_fold[bid] = f
-        desired[f] = desired[f] - mat.loc[bid]
-        desired_total[f] -= float(mat.loc[bid].sum())
+        desired[f] = desired[f] - mat.loc[bid] # type: ignore
+        desired_total[f] -= float(mat.loc[bid].sum()) # type: ignore
     if locked:
         logger.info(
             "spatial split: {} blocks locked, {} to assign", len(locked), len(mat) - len(locked)
@@ -209,7 +209,7 @@ def stratified_spatial_split(
         active = remaining.sum(axis=0).pipe(lambda s: s[s > 0])
         if active.empty:  # label-less blocks (shouldn't survive thinning) → emptiest fold
             for bid in remaining.index:
-                block_to_fold[bid] = max(desired_total, key=desired_total.get)
+                block_to_fold[bid] = max(desired_total, key=desired_total.get) # type: ignore
             break
         c = active.idxmin()
         bids = remaining.index[remaining[c] > 0].tolist()
@@ -272,7 +272,7 @@ def temporal_windows(
 
 
 # ---------------------------------------------------------------------------
-# STAC helpers (reusable client)
+# STAC helpers
 # ---------------------------------------------------------------------------
 
 
@@ -337,7 +337,7 @@ def _stack_items(
 ) -> xr.DataArray:
     """Build lazy masked composite from a list of signed STAC items."""
     # ponytail: chunk near the 64 px chip size, not 1024 — we only slice small windows,
-    # so a 1024² chunk read ~16× more per window and blew RAM with concurrent workers.
+    # so a 1024² chunk read ~16x more per window and blew RAM with concurrent workers.
     da = stackstac.stack(
         items,
         assets=bands + ["SCL"],
@@ -421,7 +421,7 @@ def _subcell_batches(
     """Group point indices into fixed ``cell_m`` spatial cells.
 
     Why this exists: the memory of one ``dask.compute`` is roughly
-    ``bbox_area × n_bands × n_scenes × 4``, and dask holds every root chunk
+    ``bbox_area x n_bands x n_scenes x 4``, and dask holds every root chunk
     resident until its last dependent window finishes — so a block whose labels
     are scattered across its full extent materialises the *dense* cube, not just
     the windows. With a sparse survey (~80 plots province-wide) that
@@ -453,7 +453,7 @@ def _window_medians(
     points_utm: list[tuple[float, float]],
     chip_px: int = CHIP_PX,
 ) -> list[ChipResult | str]:
-    """Per-point 64×64 window median from a lazy (time, band, y, x) masked stack.
+    """Per-point 64x64 window median from a lazy (time, band, y, x) masked stack.
 
     Slices each point's window lazily, medians over time, and computes all
     windows in **one** ``dask.compute`` — so only the pixels inside the windows
@@ -706,29 +706,6 @@ def _write_chip_local(
 
 
 # ---------------------------------------------------------------------------
-# Tight bounding box for label clusters
-# ---------------------------------------------------------------------------
-
-
-def _label_cluster_bbox_wgs84(
-    grp: gpd.GeoDataFrame,
-    buffer_m: float = BUFFER_M,
-    epsg: int = 32734,
-) -> object:
-    """Compute a tight WGS84 bbox around a group of UTM label points.
-
-    Adds *buffer_m* padding (half-chip) so edge labels get full chips.
-    Used for the STAC query only — the raster bounds come from the much smaller
-    per-cell bboxes in :func:`_batched_window_medians`.
-    """
-    return _points_bbox_wgs84(
-        list(zip(grp.geometry.x.values, grp.geometry.y.values, strict=True)),
-        epsg,
-        buffer_m=buffer_m,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Main extraction
 # ---------------------------------------------------------------------------
 
@@ -758,7 +735,11 @@ def _process_group(
     in the group needs it.
     """
     client = _stac_client()
-    cluster_wgs84 = _label_cluster_bbox_wgs84(grp, buffer_m=BUFFER_M, epsg=epsg)
+    # STAC query bbox only — the much smaller per-cell bboxes in
+    # _batched_window_medians set the raster bounds that actually cost memory.
+    cluster_wgs84 = _points_bbox_wgs84(
+        list(zip(grp.geometry.x.values, grp.geometry.y.values, strict=True)), epsg
+    )
     windows = temporal_windows(year, months_cfg)
     chipped_months = chipped_months or set()
 
@@ -798,7 +779,7 @@ def _process_group(
             win["start"],
             win["end"],
             bands,
-            points_utm=[(r.geometry.x, r.geometry.y) for r in pending_rows],
+            points_utm=[(r.geometry.x, r.geometry.y) for r in pending_rows], # type: ignore
             chip_px=chip_px,
             cloud_cover_max=cloud_cover_max,
             resolution_m=resolution_m,
@@ -847,8 +828,8 @@ def _process_group(
                     "chip_uri": f"{out_prefix}/{rel_path}",
                     "year": year,
                     "block_id": bid,
-                    "lon": float(row.lon),  # EPSG:4326 — chip extracted in the group's native zone
-                    "lat": float(row.lat),
+                    "lon": float(row.lon), # type: ignore
+                    "lat": float(row.lat), # type: ignore
                     "valid_frac": valid_frac,
                 }
             )
@@ -985,17 +966,6 @@ def _save_block_folds(block_to_fold: dict[int, str], uri: str) -> None:
     logger.info("saved block folds: {} blocks → {}", len(df), uri)
 
 
-def _write_split_files(manifest: pd.DataFrame, out_prefix: str) -> None:
-    """Write per-fold obs_id lists as text files."""
-    for fold in manifest["fold"].unique():
-        ids = manifest.loc[manifest["fold"] == fold, "obs_id"].unique()
-        split_uri = f"{out_prefix}/{fold}.txt"
-        split_content = "\n".join(sorted(ids)) + "\n"
-        ensure_parent(split_uri)
-        Path(split_uri).write_text(split_content)
-        logger.info("split file: {} obs_ids → {}", len(ids), split_uri)
-
-
 def thin_labels(
     labels: gpd.GeoDataFrame,
     thin_m: float,
@@ -1048,7 +1018,7 @@ def make_split(
 
     Pipeline: load manifest → filter species → spatial block split → assign
     class_id. (Thinning happens earlier, before extraction, in ``thin_labels``;
-    obs with only 1–2 of the configured months are kept — the temporal head
+    obs with only 1-2 of the configured months are kept — the temporal head
     masks missing timesteps.)
 
     Called at training time — decoupled from chip extraction so the same
@@ -1081,7 +1051,7 @@ def make_split(
     train_frac, val_frac : float
         Target proportions for train and validation folds.
     out_prefix : str | None
-        If set, writes ``block_folds.parquet`` and ``{fold}.txt`` split files.
+        If set, writes ``block_folds.parquet`` and ``split.parquet``.
     lock_folds : bool
         If True and ``out_prefix`` has an existing ``block_folds.parquet``,
         lock those block assignments and only assign new blocks.
@@ -1211,7 +1181,6 @@ def make_split(
 
     if out_prefix:
         _save_block_folds(block_to_fold, f"{out_prefix}/block_folds.parquet")
-        _write_split_files(manifest, out_prefix)
         # one-row-per-obs split artifact (obs_id → fold, class_id) — the head reads
         # this directly so it never re-derives class assignment from the schema.
         cols = ["obs_id", "fold"] + (["class_id"] if "class_id" in manifest.columns else [])
@@ -1299,7 +1268,6 @@ def _reconcile_manifest(
 
 def extract_training_chips(
     labels: gpd.GeoDataFrame,
-    blocks: gpd.GeoDataFrame,
     months_by_zone: dict[str, list[dict]],
     bands: list[str],
     out_prefix: str,
@@ -1426,12 +1394,12 @@ def extract_training_chips(
         # re-fetches exactly the missing months and nothing else.
         got = existing_manifest.groupby("obs_id")["month_label"].agg(set)
         fully_chipped = {
-            oid for oid, months in got.items() if expected_months.get(oid, set()) <= months
+            oid for oid, months in got.items() if expected_months.get(oid, set()) <= months # type: ignore
         }
         # Regrouped ≠ partial: a partial obs is only *missing* months (crashed run,
         # cloudy month), a regrouped one also has *extra* ones from its old zone's
         # calendar, about to be pruned. Same count, different cause — keep them apart.
-        n_regrouped = sum(1 for oid, ms in got.items() if ms - expected_months.get(oid, ms))
+        n_regrouped = sum(1 for oid, ms in got.items() if ms - expected_months.get(oid, ms)) # type: ignore
         n_before = len(labels)
         labels = labels[~labels["obs_id"].isin(fully_chipped)]
         partial_ids = {r[0] for r in chipped_months} - fully_chipped
@@ -1471,14 +1439,14 @@ def extract_training_chips(
         futures = {}
         for g_idx, ((bid, year, zone), grp) in enumerate(groups, 1):
             # each label's month set is chosen by its rainfall zone (winter vs summer)
-            grp_months = months_by_zone[zone]
+            grp_months = months_by_zone[zone] # type: ignore
             # extract this group in its OWN native S2 UTM zone (no cross-zone resampling)
             g_epsg = utm_epsg(grp["lon"].mean(), grp["lat"].mean())
-            grp_utm = grp.to_crs(f"EPSG:{g_epsg}")
+            grp_utm = grp.to_crs(f"EPSG:{g_epsg}") # type: ignore
             fut = pool.submit(
                 _process_group,
-                int(bid),
-                int(year),
+                int(bid), # type: ignore
+                int(year), # type: ignore
                 grp_utm,
                 grp_months,
                 bands,
@@ -1493,7 +1461,7 @@ def extract_training_chips(
                 chipped_months,
                 max_scenes,
             )
-            futures[fut] = (int(bid), int(year))
+            futures[fut] = (int(bid), int(year)) # type: ignore
 
         # Time-based progress: log every 60s OR every 50 groups, whichever is
         # sooner. With slow blocks (retries + downloads) the count-only cadence
@@ -1551,7 +1519,6 @@ def extract_training_chips(
             )
             manifest_df = extract_training_chips(
                 labels=fallback_labels,
-                blocks=blocks,
                 months_by_zone=months_by_zone,
                 default_zone=default_zone,
                 bands=bands,
