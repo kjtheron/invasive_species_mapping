@@ -17,7 +17,11 @@ Decisions baked in (see each catchment's metadata PDF):
 - **Only mappable classes ingested.** Shade (shadow artefact) and Alien_Other
   (unspecified alien, no genus to assign) resolve to no class and are dropped.
 
-Catchments processed: Olifants-Doring (WC), Tugela (KZN), uMzimvubu (EC). The
+Catchments are hydrological, so they cross provincial borders: ``aoi_admin1`` is
+derived **per point** (:func:`cmrv.aoi.province_of`), not from the catchment. The
+declared province is only a fallback for points outside every ADM1 polygon.
+
+Catchments processed: Olifants-Doring (WC + NC), Tugela (KZN), uMzimvubu (EC + KZN). The
 Luvuvhu and Sabie-Crocodile figshare articles ship broken TrainingData (a duplicate
 of Tugela / an empty folder respectively) and are omitted — see download/README.md.
 """
@@ -32,6 +36,7 @@ import geopandas as gpd
 import pandas as pd
 from loguru import logger
 
+from cmrv.aoi import province_of
 from cmrv.labels.classmap import warn_unmapped
 from cmrv.labels.observations import PROCESSED_ROOT, make_run_id, write_partition
 
@@ -100,7 +105,7 @@ class Catchment:
     density_col: str | None  # IAP density % column (→ cover_pct); None if absent
     date_col: str | None  # survey-date column; None if the shapefile carries no date
     src_crs: str | None  # source CRS to assume when the shapefile declares none
-    aoi_admin1: str  # province (provenance)
+    aoi_admin1: str  # declared province — FALLBACK only; province_of decides per point
     campaign_date: str  # ISO fallback date for undated points (single field campaign)
     doi: str
     url: str
@@ -184,8 +189,11 @@ def _build_rows(
     for i, rec in enumerate(gdf.to_dict("records")):
         lulc = str(rec.get(cat.class_col) or "").strip()
         sp_norm, rank = _lulc_to_taxon(lulc)
-        # obs_id from the (unique) geometry — NOT the X/Y columns, which are the
-        # parent-point coords shared across GIS-harvested child points.
+        # obs_id from the geometry — never the X/Y columns. Geometry is the
+        # distance/direction-corrected target position and is unique per row. X/Y is
+        # the raw observer reading, and it is inconsistent across catchments: WGS84
+        # degrees in Olifants-Doring, UTM 35S metres in uMzimvubu, where 670 of 5479
+        # rows also share a value. Neither CRS-portable nor unique, so it can't key an id.
         geom = rec["geometry"]
         date_raw = rec.get(cat.date_col) if cat.date_col else None
         density = rec.get(cat.density_col) if cat.density_col else None
@@ -208,7 +216,7 @@ def _build_rows(
                 "weight": 1.0,
                 "ingested_at": ingested_at,
                 "ingest_run_id": run_id,
-                "aoi_admin1": cat.aoi_admin1,
+                "aoi_admin1": rec.get("_prov") or cat.aoi_admin1,
             }
         )
     return rows
@@ -265,6 +273,15 @@ def ingest_mapwaps(
         valid = valid[valid.dt.year > 1990]
         if len(valid):
             fallback_date = valid.mode().iloc[0].date().isoformat()
+
+    # Province per point, not per catchment. Catchments are hydrological and cross
+    # provincial borders: Olifants-Doring is 17% Northern Cape (the metadata PDF says
+    # so outright), uMzimvubu is 16% KwaZulu-Natal. The declared `aoi_admin1` is only
+    # the fallback for points outside every ADM1 polygon (border jitter).
+    gdf["_prov"] = province_of(gdf).fillna(cat.aoi_admin1)
+    other = gdf.loc[gdf["_prov"] != cat.aoi_admin1, "_prov"].value_counts()
+    if not other.empty:
+        logger.info("{}: declared {} but {}", cat.dataset, cat.aoi_admin1, other.to_dict())
 
     rows = _build_rows(gdf, cat, run_id, ingested_at, fallback_date=fallback_date)
     warn_unmapped({r["species_normalized"] for r in rows}, source=cat.dataset)
