@@ -424,7 +424,7 @@ def _subcell_batches(
     ``bbox_area × n_bands × n_scenes × 4``, and dask holds every root chunk
     resident until its last dependent window finishes — so a block whose labels
     are scattered across its full extent materialises the *dense* cube, not just
-    the windows. With a sparse survey (BioSCape: 83 plots province-wide) that
+    the windows. With a sparse survey (~80 plots province-wide) that
     bbox collapsed to a few hundred metres and nobody noticed. With a dense one
     (MapWAPS: 558 labels in one 10 km block) it is the whole block, ~2.6 GB per
     worker, and six workers OOM a 15 GB box hours into a run.
@@ -1065,7 +1065,7 @@ def make_split(
         ``None`` = all species in the manifest.
     class_map_name : str | None
         Name of a ``class_maps`` entry in ``schema_path`` (e.g.
-        ``"western_cape_iap"``).  When set, a ``class_id`` column is added by
+        ``"sa_landcover"``).  When set, a ``class_id`` column is added by
         matching ``manifest.species`` against the ``species_map`` in the
         schema.  Multiple species that share a class_id are thereby collapsed
         to a single training class (e.g. all *Eucalyptus* spp → class 5).

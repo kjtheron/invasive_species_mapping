@@ -9,7 +9,7 @@ import geopandas as gpd
 import tyro
 from loguru import logger
 
-from cmrv.aoi import SA_ALBERS, build_tile_grid, fetch_provinces, fetch_western_cape
+from cmrv.aoi import SA_ALBERS, build_tile_grid, fetch_provinces
 from cmrv.ingest.chips import (
     build_spatial_blocks,
     extract_training_chips,
@@ -17,7 +17,6 @@ from cmrv.ingest.chips import (
     thin_labels,
 )
 from cmrv.io import load_config, read_gdf, write_gdf_parquet
-from cmrv.labels.bioscape import ingest_lineintercept, ingest_plotcoverage
 from cmrv.labels.mapwaps import CATCHMENTS, ingest_mapwaps
 from cmrv.labels.merge import load_training_labels
 from cmrv.labels.observations import PROCESSED_ROOT, write_summary
@@ -38,30 +37,6 @@ def parse_bbox(s: str) -> tuple[float, float, float, float]:
     return vals
 
 
-def aoi_wc(
-    out: str = "data/aoi/processed/western_cape.parquet",
-    source: str | None = None,
-    buffer_m: float = 1000.0,
-    simplify_m: float = 100.0,
-    target_crs: str = "EPSG:4326",
-) -> None:
-    """Build the Western Cape province polygon from GeoBoundaries (gbOpen ADM1) → GeoParquet.
-
-    Downloads SA provinces from GeoBoundaries (CC-BY 4.0; cached under data/aoi/raw/),
-    filters Western Cape, cleans vertices (make-valid, drops the offshore Prince
-    Edward Islands, simplifies by --simplify-m), buffers by --buffer-m. Pass
-    --source <file> to use a local boundary file instead. Scaling to SA later =
-    dissolve all provinces (same machinery, bigger polygon).
-    """
-    gdf = fetch_western_cape(
-        source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=target_crs
-    )
-    area_km2 = gdf.to_crs(SA_ALBERS).area.sum() / 1e6
-    logger.info("Western Cape AOI: {} feature, area = {:.0f} km^2", len(gdf), area_km2)
-    write_gdf_parquet(gdf, out)
-    logger.success("wrote {}", out)
-
-
 def aoi_sa(
     out: str = "data/aoi/processed/south_africa.parquet",
     source: str | None = None,
@@ -71,9 +46,9 @@ def aoi_sa(
 ) -> None:
     """Build a national South Africa AOI (all 9 provinces dissolved) → GeoParquet.
 
-    The **training** AOI for multi-province chip extraction (labels span WC/KZN/EC/…);
-    inference still uses the WC AOI (``aoi-wc``). Boundary from GeoBoundaries gbOpen
-    ADM1; drops the offshore Prince Edward Islands. Pass ``--source`` for a local file.
+    The only AOI: training chips and the delivered map both use it. Boundary from
+    GeoBoundaries gbOpen ADM1; drops the offshore Prince Edward Islands. Pass
+    ``--source`` for a local file.
     """
     gdf = fetch_provinces(
         None, source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=target_crs
@@ -104,31 +79,6 @@ def aoi_tiles(
     logger.success("wrote {}", out)
 
 
-def labels_bioscape_ingest(
-    schema: str = "configs/labels_schema.yaml",
-    class_map: str = "western_cape_iap",
-    root: str = PROCESSED_ROOT,
-    iap_only: bool = True,
-) -> None:
-    """Ingest BioSCape VegPlots (Berg+Eerste) → unified observation store.
-
-    Writes ``source=bioscape_line`` + ``source=bioscape_plot`` partitions.
-    IAP membership decided from the class-map ``members[]``. CSV paths default
-    to the ORNL DAAC archive layout under
-    ``data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/``.
-
-    One adapter per scientific dataset — add a sibling ``labels-<dataset>-ingest``
-    verb for each new source, all emitting the same observation schema.
-    """
-    line_path = ingest_lineintercept(
-        schema_path=schema, class_map_name=class_map, root=root, iap_only=iap_only
-    )
-    plot_path = ingest_plotcoverage(
-        schema_path=schema, class_map_name=class_map, root=root, iap_only=iap_only
-    )
-    logger.success("bioscape ingest complete — line={} plot={}", line_path, plot_path)
-
-
 def labels_mapwaps_ingest(
     root: str = PROCESSED_ROOT,
     catchment: str | None = None,
@@ -137,8 +87,8 @@ def labels_mapwaps_ingest(
 
     Registered catchments: Olifants-Doring (WC), Tugela (KZN), uMzimvubu (EC).
     All mappable classes ingested — IAP genera (Alien_*), native biomes, transformed
-    land cover — each crosswalked to a ``sa_landcover`` member (Shade /
-    Burnt / Bracken / Alien_Other dropped). Pass ``--catchment <name>`` for one.
+    land cover — each crosswalked to a ``sa_landcover`` member (only Shade and
+    Alien_Other are dropped). Pass ``--catchment <name>`` for one.
     Assign class_id at make-split via ``--class-map-name sa_landcover``.
     """
     keys = [catchment] if catchment else list(CATCHMENTS)
@@ -318,7 +268,7 @@ def chips_make_split(
     thinning already happened at ``ingest-chips`` time.
 
     --species: species names (exact match) to include. Omit for all.
-    --class-map-name: a class_maps entry in the schema YAML (e.g. "western_cape_iap").
+    --class-map-name: a class_maps entry in the schema YAML (e.g. "sa_landcover").
                       Adds a class_id column collapsing species to a shared class
                       (e.g. all Eucalyptus spp → class 5); the split is stratified on
                       class_id. Unmapped rows dropped unless --species is given.
@@ -518,10 +468,8 @@ def main() -> None:
 
     tyro.extras.subcommand_cli_from_dict(
         {
-            "aoi-wc": aoi_wc,
             "aoi-sa": aoi_sa,
             "aoi-tiles": aoi_tiles,
-            "labels-bioscape-ingest": labels_bioscape_ingest,
             "labels-mapwaps-ingest": labels_mapwaps_ingest,
             "labels-sanlc-ingest": labels_sanlc_ingest,
             "labels": labels_inspect,

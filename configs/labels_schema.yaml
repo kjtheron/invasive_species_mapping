@@ -4,141 +4,26 @@
 # training subsets crosswalk (species_normalized → class_id) via
 # class_maps.<name>.<id>.members[] below, applied at `cmrv make-split` time.
 #
-# Two framings coexist: the IAP-only maps (western_cape_iap, *_genus) where
-# "not-IAP" is left to downstream OOD novelty flagging, and the unified
-# sa_landcover map where native biomes (VegMap T_BIOME) + transformed
-# classes (SANLC accuracy points) are explicit — every pixel classified.
+# One national map: sa_landcover. Native biomes (VegMap T_BIOME) + transformed
+# classes (SANLC accuracy points) are explicit alongside the alien genera, so
+# every pixel is classified rather than thresholded against an OOD score.
 #
-# Single source of truth: each class lists its ``members`` — canonical scientific
-# binomials for IAP classes, or the adapter-emitted biome / land-cover string for
-# native + transformed classes. ``genus_fallback: true`` collapses any species in
-# ``genus`` into that class.
+# Single source of truth: each class lists its ``members`` — the strings an adapter
+# actually emits as ``species_normalized``. Today every source has a closed
+# vocabulary, so those are bare genera (Pinus, Acacia) and biome / land-cover
+# tokens. ``genus_fallback: true`` also catches any binomial in ``genus``, which
+# matters only once a species-level source is ingested.
 # ----------------------------------------------------------------------------
 
 nodata: 255
+
+# The class map every verb uses when none is named on the command line.
+default_class_map: sa_landcover
 
 # ----------------------------------------------------------------------------
 # class_maps — one entry per training config; keyed by config name.
 # ----------------------------------------------------------------------------
 class_maps:
-
-  # 8-class IAP schema for the Western Cape Phase 0 run.
-  # A. cyclops merged into A. saligna (class 1); three riparian IAPs collapsed
-  # into class 7 (data-poor individually; share riparian habitat).
-  western_cape_iap:
-    0:
-      name: acacia_mearnsii
-      members: ["Acacia mearnsii", "Racosperma mearnsii"]
-    1:
-      name: acacia_saligna           # absorbs A. cyclops
-      members:
-        - "Acacia saligna"
-        - "Acacia cyanophylla"       # old synonym of saligna
-        - "Acacia cyclops"           # merged into class 1
-    2:
-      name: acacia_melanoxylon
-      members: ["Acacia melanoxylon"]
-    3:
-      name: acacia_longifolia
-      members: ["Acacia longifolia"]
-    4:
-      name: pinus_spp                # pinaster + radiata + halepensis merged
-      members:
-        - "Pinus pinaster"
-        - "Pinus radiata"
-        - "Pinus halepensis"
-      genus_fallback: true
-      genus: pinus
-    5:
-      name: eucalyptus_spp
-      members:
-        - "Eucalyptus camaldulensis"
-        - "Eucalyptus globulus"
-        - "Eucalyptus cladocalyx"
-        - "Eucalyptus lehmannii"
-      genus_fallback: true
-      genus: eucalyptus
-    6:
-      name: hakea_sericea
-      members: ["Hakea sericea"]
-    7:
-      name: iap_riparian             # Leptospermum + Populus + Sesbania
-      members:
-        - "Leptospermum laevigatum"
-        - "Populus × canescens"
-        - "Populus x canescens"
-        - "Populus alba"
-        - "Populus canescens"
-        - "Sesbania punicea"
-    8:
-      name: prosopis_spp             # mesquite — genus-level (MapWAPS Alien_Prosopis)
-      members:
-        - "Prosopis glandulosa"
-        - "Prosopis velutina"
-        - "Prosopis juliflora"
-        - "Prosopis chilensis"
-      genus_fallback: true
-      genus: prosopis
-
-  # --------------------------------------------------------------------------
-  # Genus-level collapse for Phase 0. MapWAPS labels are genus/functional only
-  # (Alien_Pine/Gum/Wattle/Prosopis), so the species-level Acacia split can't be
-  # honoured across sources. Acacia → acacia_spp. Flip to western_cape_iap +
-  # hierarchical loss once enough species-level data lands.
-  western_cape_iap_genus:
-    0:
-      name: acacia_spp
-      members:
-        - "Acacia mearnsii"
-        - "Acacia saligna"
-        - "Acacia cyanophylla"
-        - "Acacia cyclops"
-        - "Acacia melanoxylon"
-        - "Acacia longifolia"
-      genus_fallback: true
-      genus: acacia
-    1:
-      name: pinus_spp
-      members:
-        - "Pinus pinaster"
-        - "Pinus radiata"
-        - "Pinus halepensis"
-      genus_fallback: true
-      genus: pinus
-    2:
-      name: eucalyptus_spp
-      members:
-        - "Eucalyptus camaldulensis"
-        - "Eucalyptus globulus"
-      genus_fallback: true
-      genus: eucalyptus
-    3:
-      name: hakea_spp
-      members:
-        - "Hakea sericea"
-      genus_fallback: true
-      genus: hakea
-    4:
-      name: prosopis_spp
-      members:
-        - "Prosopis glandulosa"
-        - "Prosopis velutina"
-      genus_fallback: true
-      genus: prosopis
-    5:
-      name: iap_riparian
-      members:
-        - "Leptospermum laevigatum"
-        - "Populus × canescens"
-        - "Populus x canescens"
-        - "Populus alba"
-        - "Populus canescens"
-        - "Sesbania punicea"
-      # MapWAPS labels Alien_Poplar at genus rank ("Populus"), which the binomials
-      # above don't catch. sa_landcover gives Populus its own class (21); here it
-      # stays folded into riparian.
-      genus_fallback: true
-      genus: populus
 
   # --------------------------------------------------------------------------
   # Unified land-cover map: IAP genera (field) + native biomes (VegMap T_BIOME)
@@ -146,36 +31,16 @@ class_maps:
   # classified → seamless map. Biome + transformed labels come from
   # `cmrv labels-sanlc-ingest`; their members are the strings that adapter emits.
   sa_landcover:
-    # --- IAP genera (field adapters) ---
-    0:
-      name: acacia_spp
-      members: ["Acacia mearnsii", "Acacia saligna", "Acacia cyanophylla",
-                "Acacia cyclops", "Acacia melanoxylon", "Acacia longifolia"]
-      genus_fallback: true
-      genus: acacia
-    1:
-      name: pinus_spp
-      members: ["Pinus pinaster", "Pinus radiata", "Pinus halepensis"]
-      genus_fallback: true
-      genus: pinus
-    2:
-      name: eucalyptus_spp
-      members: ["Eucalyptus camaldulensis", "Eucalyptus globulus"]
-      genus_fallback: true
-      genus: eucalyptus
-    3:
-      name: hakea_spp
-      members: ["Hakea sericea"]
-      genus_fallback: true
-      genus: hakea
-    4:
-      name: prosopis_spp
-      members: ["Prosopis glandulosa", "Prosopis velutina"]
-      genus_fallback: true
-      genus: prosopis
-    5:
-      name: iap_riparian            # Populus split out to its own class (21) once data-rich
-      members: ["Leptospermum laevigatum", "Sesbania punicea"]
+    # --- alien invasive genera (MapWAPS Alien_* classes) ---
+    # ``members`` is the exact string the adapter emits; ``genus_fallback`` also
+    # catches any binomial in that genus, so a species-level source needs no edit
+    # here. Class 5 (iap_riparian: Leptospermum + Sesbania) was removed on
+    # 2026-08-12 — no adapter surveys either genus.
+    0: {name: acacia_spp,     members: ["Acacia"],     genus_fallback: true, genus: acacia}
+    1: {name: pinus_spp,      members: ["Pinus"],      genus_fallback: true, genus: pinus}
+    2: {name: eucalyptus_spp, members: ["Eucalyptus"], genus_fallback: true, genus: eucalyptus}
+    3: {name: hakea_spp,      members: ["Hakea"],      genus_fallback: true, genus: hakea}
+    4: {name: prosopis_spp,   members: ["Prosopis"],   genus_fallback: true, genus: prosopis}
     # --- native biomes (VegMap T_BIOME) ---
     6:  {name: fynbos,          members: ["fynbos"]}
     7:  {name: succulent_karoo, members: ["succulent_karoo"]}
@@ -194,8 +59,14 @@ class_maps:
     # --- added for multi-catchment SA coverage (WC Renosterveld; KZN/EC summer-rainfall) ---
     19: {name: renosterveld,    members: ["renosterveld"]}   # own class (was folded into fynbos)
     20: {name: savanna,         members: ["savanna"]}        # native woody: MapWAPS Indigenous Bush_*
-    21:
-      name: populus_spp                                      # Alien_Poplar (Populus × canescens)
-      members: ["Populus canescens", "Populus alba"]
-      genus_fallback: true
-      genus: populus
+    21: {name: populus_spp,   members: ["Populus"],    genus_fallback: true, genus: populus}
+    # --- added 2026-08-12: MapWAPS classes previously dropped at ingest ---
+    # burnt is a real cover state, not noise. Post-fire fynbos/grassland takes years
+    # to return to its pre-fire spectrum, and the 3-month stack lands inside that
+    # window — char, then pioneer green-up — which is exactly what separates it from
+    # mature veg. Variation across the stack is the class's signature, not a defect.
+    # Residual risk is fire *age*: event_date says when the point was surveyed, not
+    # when it burned, so 1-month-old and 2-year-old scars carry the same label.
+    # Watch for it absorbing `bare` / recently-cultivated at the old end.
+    22: {name: burnt,           members: ["burnt"]}
+    23: {name: bracken,         members: ["bracken"]}   # Pteridium aquilinum — native

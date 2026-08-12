@@ -8,11 +8,16 @@ Reads ``class_maps.<name>`` from ``configs/labels_schema.yaml`` and exposes a
    ``genus`` of any class with ``genus_fallback: true``.
 
 If neither resolves, returns ``None`` (caller logs + drops).
+
+``warn_unmapped`` is the ingest-time cross-check: it names any value an adapter is
+about to store that this crosswalk can't resolve, so the gap surfaces before the
+imagery bill rather than at ``make-split``.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +25,8 @@ from typing import Any
 from loguru import logger
 
 from cmrv.io import load_config
+
+DEFAULT_SCHEMA_PATH = "configs/labels_schema.yaml"
 
 
 @dataclass(frozen=True)
@@ -163,3 +170,43 @@ def _build_from_members(name: str, cm_block: dict[Any, Any]) -> ClassMap:
         binomial_to_class=binomial_to_class,
         genus_to_class=genus_to_class,
     )
+
+
+def warn_unmapped(
+    values: Iterable[str | None],
+    source: str,
+    class_map_name: str | None = None,
+    schema_path: str | Path = DEFAULT_SCHEMA_PATH,
+) -> list[str]:
+    """Name every emitted value the class map can't resolve. Returns them, sorted.
+
+    An adapter stores what it surveys — ingest is deliberately independent of the
+    training class map, so this **warns and never raises**. But a value the class
+    map can't resolve is invisible until ``make-split``, by which point it has been
+    chipped at full imagery cost. This is the cheap end of the pipeline; say it here.
+
+    Called by each adapter after it builds its rows, with the distinct
+    ``species_normalized`` values it is about to write.
+    """
+    cm = build_lookup(schema_path, class_map_name or _default_class_map(schema_path))
+    unmapped = sorted({str(v) for v in values if v and cm.resolve(str(v)) is None})
+    if unmapped:
+        logger.warning(
+            "{}: {} value(s) resolve to no class in '{}' — they will be chipped, then "
+            "dropped at make-split. Add them to members[] first: {}",
+            source,
+            len(unmapped),
+            cm.name,
+            unmapped,
+        )
+    else:
+        logger.info("{}: all emitted values resolve under '{}'", source, cm.name)
+    return unmapped
+
+
+def _default_class_map(schema_path: str | Path) -> str:
+    """Read ``default_class_map`` from the schema; raise if it isn't declared."""
+    name = load_config(schema_path).get("default_class_map")
+    if not name:
+        raise KeyError(f"{schema_path} declares no 'default_class_map'")
+    return str(name)

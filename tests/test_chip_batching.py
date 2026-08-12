@@ -1,7 +1,7 @@
 """Memory-bounding of chip extraction: spatial sub-batching + scene cap.
 
 The regression these guard: peak RSS used to scale with labels-per-block, so a
-dense survey (MapWAPS) OOM'd a run that a sparse one (BioSCape) sailed through.
+dense survey (MapWAPS) OOM'd a run that a sparse one sailed through.
 """
 
 from __future__ import annotations

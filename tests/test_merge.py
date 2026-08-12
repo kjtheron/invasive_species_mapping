@@ -15,7 +15,7 @@ from cmrv.labels.observations import write_partition
 
 def _obs_gdf(rows: list[dict]) -> gpd.GeoDataFrame:
     base = {
-        "source": "bioscape_plot",
+        "source": "mapwaps",
         "source_record_id": "0",
         "geom_type": "point",
         "coord_uncertainty_m": None,
@@ -39,7 +39,7 @@ def test_load_training_labels_species_and_aoi(tmp_path):
             {"obs_id": "gbif:2", "species_normalized": "pinus radiata"},
         ]
     )
-    write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="r1")
+    write_partition(gdf, "mapwaps_olifants_doring", root=root, run_id="r1")
 
     aoi = f"{tmp_path}/aoi.parquet"
     write_gdf_parquet(

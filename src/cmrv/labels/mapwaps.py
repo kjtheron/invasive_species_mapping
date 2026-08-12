@@ -14,8 +14,8 @@ Decisions baked in (see each catchment's metadata PDF):
 - **cover_pct ← the density column** (estimated %); ``0 → None`` (ambiguous: truly
   sparse vs not recorded). Native / transformed classes carry density 0 → cover None.
 - **taxon_rank = genus** for the Alien_* IAP classes — the survey is genus-level.
-- **Only mappable classes ingested.** Shade / Burnt / Bracken / Alien_Other resolve
-  to no class and are dropped at ingest.
+- **Only mappable classes ingested.** Shade (shadow artefact) and Alien_Other
+  (unspecified alien, no genus to assign) resolve to no class and are dropped.
 
 Catchments processed: Olifants-Doring (WC), Tugela (KZN), uMzimvubu (EC). The
 Luvuvhu and Sabie-Crocodile figshare articles ship broken TrainingData (a duplicate
@@ -32,6 +32,7 @@ import geopandas as gpd
 import pandas as pd
 from loguru import logger
 
+from cmrv.labels.classmap import warn_unmapped
 from cmrv.labels.observations import PROCESSED_ROOT, make_run_id, write_partition
 
 SOURCE = "mapwaps"
@@ -44,8 +45,8 @@ COORD_UNCERTAINTY_M = 15.0
 # MapWAPS class string → (species_normalized, taxon_rank) for the
 # ``sa_landcover`` map. Union across all catchments. Alien_* → IAP genus;
 # native veg → VegMap-biome member; transformed → land-cover member. Classes NOT here
-# are dropped at ingest: "Shade" (shadow), "Burnt" (transient scar), "Bracken"
-# (indigenous fern, no land-cover class), "Alien_Other" (unspecific alien).
+# are dropped at ingest: "Shade" (shadow artefact) and "Alien_Other" (unspecific
+# alien — no genus to assign).
 _LULC_TO_CLASS: dict[str, tuple[str, str]] = {
     # --- alien invasive trees → IAP genus (survey didn't resolve to species) ---
     "Alien_Pine": ("Pinus", "genus"),
@@ -80,6 +81,12 @@ _LULC_TO_CLASS: dict[str, tuple[str, str]] = {
     "Wetland - Reed": ("wetland", "landcover"),
     "Wetland_Other": ("wetland", "landcover"),
     "Wetland - Palmiet": ("wetland", "landcover"),
+    # --- other cover states ---
+    # Bracken is Pteridium aquilinum — a taxon, but deliberately NOT rank species/genus:
+    # that rank marks IAP observations, and `sanlc.py` buffers around them to exclude
+    # land-cover points. Bracken is indigenous, so it must not trigger that exclusion.
+    "Bracken": ("bracken", "landcover"),
+    "Burnt": ("burnt", "landcover"),
 }
 
 
@@ -216,7 +223,7 @@ def ingest_mapwaps(
 
     Every class in ``_LULC_TO_CLASS`` is crosswalked to a ``sa_landcover``
     member (IAP genus / native biome / transformed land cover); unmapped classes
-    (Shade / Burnt / Bracken / Alien_Other) are dropped. Geometry used as-is,
+    (Shade / Alien_Other) are dropped. Geometry used as-is,
     reprojected to 4326 (assuming ``cat.src_crs`` when the shapefile declares none).
     """
     cat = CATCHMENTS[catchment]
@@ -260,6 +267,7 @@ def ingest_mapwaps(
             fallback_date = valid.mode().iloc[0].date().isoformat()
 
     rows = _build_rows(gdf, cat, run_id, ingested_at, fallback_date=fallback_date)
+    warn_unmapped({r["species_normalized"] for r in rows}, source=cat.dataset)
     out = gpd.GeoDataFrame(pd.DataFrame(rows), geometry=list(gdf.geometry), crs="EPSG:4326")
 
     path = write_partition(out, cat.dataset, root=root, run_id=run_id)

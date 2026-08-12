@@ -8,10 +8,14 @@ alignment (2018→2018 S2, …).
 
 Pipeline: load all years → map each point's land-cover class to our scheme via
 ``ACC_CLASS_TO_CLASS`` → de-duplicate points identical across years (same location
-+ class, keep latest) → clip to WC → name natural-vegetation points by VegMap 2024
-biome (``T_BIOME``; SANLC's natural classes don't resolve the Cape biomes) →
-exclude known-IAP areas → emit ``source=sanlc``. Feeds the unified
-``sa_landcover`` class map alongside the IAP genera.
++ class, keep latest) → clip to the national AOI → name natural-vegetation points by
+VegMap 2024 biome (``T_BIOME``; SANLC's natural classes don't resolve the Cape biomes)
+→ stamp each point's province by ADM1 join → exclude known-IAP areas → emit
+``source=sanlc``. Feeds the unified ``sa_landcover`` class map alongside the IAP genera.
+
+The points are national, so ``aoi_admin1`` is derived **per point** — it picks the
+rainfall-zone month calendar at chip time, and one hardcoded province would silently
+chip half the country on the wrong calendar.
 """
 
 from __future__ import annotations
@@ -25,21 +29,22 @@ import pandas as pd
 import pyogrio
 from loguru import logger
 
-from cmrv.io import read_gdf
+from cmrv.aoi import SA_ALBERS, province_of
+from cmrv.io import load_config, read_gdf
+from cmrv.labels.classmap import warn_unmapped
 from cmrv.labels.observations import PROCESSED_ROOT, make_run_id, read_all, write_partition
 
 DATASET = "sanlc_accuracy_points"
 SOURCE = "sanlc"
 POINTS_DIR = Path("data/labels/raw/sanlc_accuracy_points")
 VEGMAP_SHP = Path("data/labels/raw/vegmap_2024/Shapefile/NVM2024Final_IEM5_12_07012025.shp")
-AOI = "data/aoi/processed/western_cape.parquet"
+PIPELINE = "configs/pipeline.yaml"
 YEARS = (2018, 2020, 2022)
 
 SANLC_URL = "https://www.dffe.gov.za/egis"
 VEGMAP_URL = "https://bgis.sanbi.org/Projects/Detail/2258"
 LICENSE = "SANLC accuracy points (DFFE) + VegMap 2024 (SANBI) — free, cite sources"
 COORD_UNCERTAINTY_M = 20.0
-UTM34S = "EPSG:32734"
 
 # SANLC accuracy-point class name → our class. "NATURAL" → named by VegMap biome.
 ACC_CLASS_TO_CLASS: dict[str, str] = {
@@ -137,6 +142,7 @@ def ingest_sanlc(
     iap_buffer_m: float = 320.0,
     root: str = PROCESSED_ROOT,
     run_id: str | None = None,
+    pipeline: str = PIPELINE,
 ) -> str:
     """Ingest SANLC accuracy points + VegMap biome → ``source=sanlc`` store."""
     run_id = run_id or make_run_id(SOURCE)
@@ -159,9 +165,9 @@ def ingest_sanlc(
         "after de-dup identical (loc+class) across years: {} (-{})", len(pts), n0 - len(pts)
     )
 
-    aoi = read_gdf(AOI)
+    aoi = read_gdf(load_config(pipeline)["aoi"]["train_path"])
     pts = pts[pts.geometry.within(aoi.union_all())].reset_index(drop=True)
-    logger.info("in WC AOI: {}", len(pts))
+    logger.info("in AOI: {}", len(pts))
 
     nat = pts["cls"] == "NATURAL"
     if nat.any():
@@ -173,14 +179,26 @@ def ingest_sanlc(
     # Only species/genus rows are IAP observations — MapWAPS also contributes native
     # (biome) + transformed (landcover) points, which must NOT trigger exclusion.
     store = read_all(root)  # native GeoParquet → geometry already shapely
-    iap = store.loc[store["taxon_rank"].isin(("species", "genus")), "geometry"].to_crs(UTM34S)
+    iap = store.loc[store["taxon_rank"].isin(("species", "genus")), "geometry"].to_crs(SA_ALBERS)
     iap_buf = iap.buffer(iap_buffer_m).union_all()
-    pts = pts[~pts.to_crs(UTM34S).geometry.within(iap_buf).to_numpy()].reset_index(drop=True)
+    pts = pts[~pts.to_crs(SA_ALBERS).geometry.within(iap_buf).to_numpy()].reset_index(drop=True)
     logger.info("after IAP exclusion ({} m): {}", iap_buffer_m, len(pts))
     logger.info("per-class:\n{}", pts["cls"].value_counts().to_string())
 
+    # Province per point — it selects the rainfall-zone month calendar at chip time.
+    # A point outside every ADM1 polygon (coastal/estuary jitter) has no calendar, so
+    # drop it here rather than let ingest-chips raise on the whole run.
+    pts["admin1"] = province_of(pts)
+    n_nop = int(pts["admin1"].isna().sum())
+    if n_nop:
+        logger.warning("dropping {} point(s) outside every ADM1 province polygon", n_nop)
+        pts = pts[pts["admin1"].notna()].reset_index(drop=True)
+    logger.info("per-province:\n{}", pts["admin1"].value_counts().to_string())
+
     rows = []
-    for i, (geom, cls, yr) in enumerate(zip(pts.geometry, pts["cls"], pts["year"], strict=True)):
+    for i, (geom, cls, yr, prov) in enumerate(
+        zip(pts.geometry, pts["cls"], pts["year"], pts["admin1"], strict=True)
+    ):
         natural = cls in NATURAL_CLASSES
         rows.append(
             {
@@ -201,10 +219,11 @@ def ingest_sanlc(
                 "weight": 1.0,
                 "ingested_at": ingested_at,
                 "ingest_run_id": run_id,
-                "aoi_admin1": "western_cape",
+                "aoi_admin1": prov,
             }
         )
 
+    warn_unmapped({r["species_normalized"] for r in rows}, source=DATASET)
     out = gpd.GeoDataFrame(pd.DataFrame(rows), geometry=list(pts.geometry), crs="EPSG:4326")
     path = write_partition(out, DATASET, root=root, run_id=run_id)
     logger.success("sanlc: {} rows → {}", len(rows), path)

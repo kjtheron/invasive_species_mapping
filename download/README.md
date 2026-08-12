@@ -7,10 +7,9 @@ later by per-dataset **adapters** in `src/cmrv/labels/`.
 
 | # | Dataset | DOI / source | Province | How | Raw lands in |
 |---|---------|--------------|----------|-----|--------------|
-| 1 | BioSCape VegPlots (Berg+Eerste) | `10.3334/ORNLDAAC/2425` | WC | **manual** (Earthdata) | `data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/` |
-| 2 | MapWAPS Olifants-Doring | `10.25413/sun.29958053` | WC | `mapwaps.py` | `data/labels/raw/mapwaps_olifants_doring/` |
-| 3 | MapWAPS Tugela | `10.25413/sun.25066151` | KZN | `mapwaps.py` | `data/labels/raw/mapwaps_tugela/` |
-| 4 | MapWAPS uMzimvubu | `10.25413/sun.25050401` | EC | `mapwaps.py` | `data/labels/raw/mapwaps_umzimvubu/` |
+| 1 | MapWAPS Olifants-Doring | `10.25413/sun.29958053` | WC | `mapwaps.py` | `data/labels/raw/mapwaps_olifants_doring/` |
+| 2 | MapWAPS Tugela | `10.25413/sun.25066151` | KZN | `mapwaps.py` | `data/labels/raw/mapwaps_tugela/` |
+| 3 | MapWAPS uMzimvubu | `10.25413/sun.25050401` | EC | `mapwaps.py` | `data/labels/raw/mapwaps_umzimvubu/` |
 
 All MapWAPS catchments CC-BY 4.0 (Olifants-Doring also flags CC-BY-SA ambiguity).
 
@@ -35,20 +34,6 @@ python3 download/mapwaps.py mapwaps_tugela      # one catchment
 Only the field **TrainingData** + metadata are fetched; the large `AlienMap_*`
 rasters (the RF prediction map — not a training label) are skipped. Stdlib only
 (no project venv, no API key). Then `uv run cmrv labels-mapwaps-ingest` (all catchments).
-
-## 1. BioSCape VegPlots — MANUAL (Earthdata login)
-
-ORNL DAAC files are behind a **free NASA Earthdata Login** (not an API key).
-Download these three CSVs into
-`data/labels/raw/BioSCape_VegPlots_Berg_Eerste_2425/data/` (the
-`labels-bioscape-ingest` adapter expects this path + filenames):
-
-- `Berg_Eerste_Veg_SiteData.csv`
-- `Berg_Eerste_Veg_PlotCoverage.csv`
-- `Berg_Eerste_Veg_LineIntercept.csv`
-
-Landing page: https://www.earthdata.nasa.gov/data/catalog/ornl-cloud-bioscape-vegplots-berg-eerste-2425-1
-(DOI https://doi.org/10.3334/ORNLDAAC/2425). Then `uv run cmrv labels-bioscape-ingest`.
 
 ## Pipeline after raw download
 

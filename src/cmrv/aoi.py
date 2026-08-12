@@ -1,4 +1,4 @@
-"""AOI utilities: SA province boundaries (WC or national) + equal-area tile grid.
+"""AOI utilities: SA province boundaries (national) + equal-area tile grid.
 
 Boundary source: **GeoBoundaries gbOpen ADM1** (provinces), CC-BY 4.0
 (Runfola et al. 2020). Downloaded + cached under ``data/aoi/raw/``; pass a local
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 from loguru import logger
 from shapely import get_coordinates, make_valid
 from shapely.geometry import box
@@ -26,10 +27,9 @@ GEOBOUNDARIES_RAW = (
 )
 ZAF_ADM1_CACHE = Path("data/aoi/raw/geoBoundaries-ZAF-ADM1.geojson")
 
-WC_PROVINCE_NAME = "Western Cape"
-WC_BUFFER_M = 1_000.0
-# Prince Edward Islands are administratively WC but ~2000 km offshore (~-46.9°S);
-# drop anything south of this so the tile grid doesn't span the ocean.
+AOI_BUFFER_M = 1_000.0
+# Prince Edward Islands are administratively Western Cape but ~2000 km offshore
+# (~-46.9°S); drop anything south of this so the tile grid doesn't span the ocean.
 MAINLAND_MIN_LAT = -35.0
 
 # National equal-area CRS for tile/block grids over all of South Africa: Albers Equal
@@ -91,7 +91,7 @@ def _n_vertices(geom) -> int:
 def fetch_provinces(
     provinces: list[str] | None = None,
     source: str | Path | None = None,
-    buffer_m: float = WC_BUFFER_M,
+    buffer_m: float = AOI_BUFFER_M,
     simplify_m: float = 100.0,
     out_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
@@ -148,16 +148,29 @@ def fetch_provinces(
     return gpd.GeoDataFrame({"name": [label]}, geometry=[buffered], crs=SA_ALBERS).to_crs(out_crs)
 
 
-def fetch_western_cape(
-    source: str | Path | None = None,
-    buffer_m: float = WC_BUFFER_M,
-    simplify_m: float = 100.0,
-    out_crs: str = "EPSG:4326",
-) -> gpd.GeoDataFrame:
-    """Western Cape province polygon — thin wrapper over :func:`fetch_provinces`."""
-    return fetch_provinces(
-        [WC_PROVINCE_NAME], source=source, buffer_m=buffer_m, simplify_m=simplify_m, out_crs=out_crs
-    )
+
+# GeoBoundaries gbOpen ADM1 misspells one province ("Nothern Cape"). Correct it here
+# so configs/pipeline.yaml keys stay spelled the way a human would write them.
+_ADM1_SLUG_FIXES = {"nothern_cape": "northern_cape"}
+
+
+def province_of(points: gpd.GeoDataFrame, source: str | Path | None = None) -> pd.Series:
+    """Point → ``aoi_admin1`` province slug via ADM1 point-in-polygon; NaN outside SA.
+
+    Slugs match the ``admin1_zone`` keys in ``configs/pipeline.yaml``
+    ("KwaZulu-Natal" → ``kwazulu_natal``). Use this for any national source whose
+    points span provinces — a hardcoded province silently picks the wrong month
+    calendar, which nothing downstream can detect.
+    """
+    adm1 = gpd.read_file(source) if source else fetch_geoboundaries_adm1()
+    name_col = "shapeName" if "shapeName" in adm1.columns else "PROVINCE"
+    adm1 = adm1[[name_col, "geometry"]]
+    adm1 = adm1.set_crs("EPSG:4326") if adm1.crs is None else adm1.to_crs("EPSG:4326")
+    joined = gpd.sjoin(points.to_crs("EPSG:4326"), adm1, how="left", predicate="within")
+    joined = joined[~joined.index.duplicated(keep="first")]  # edge: point on a shared border
+    slug = joined[name_col].astype("string").str.strip().str.lower()
+    slug = slug.str.replace(r"[ -]", "_", regex=True).replace(_ADM1_SLUG_FIXES)
+    return slug.reindex(points.index)
 
 
 def build_tile_grid(

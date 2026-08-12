@@ -4,8 +4,7 @@ Canonical store: ``data/labels/processed/<dataset>/`` — one partition director
 per source dataset (mirrors ``data/labels/raw/<dataset>/``), Parquet, deduped on
 ``obs_id``. Every row carries ``obs_id``, ``source``, ``coord_uncertainty_m``,
 and ``ingested_at`` for traceability. Multiple ``source`` values may live in one
-dataset folder (e.g. BioSCape line + plot) — they are distinguished by the
-``source`` column, not the path.
+dataset folder — they are distinguished by the ``source`` column, not the path.
 
 ``class_id`` is deliberately **not** in this schema — training configs crosswalk
 ``species_normalized → class_id`` via
@@ -28,7 +27,6 @@ PROCESSED_ROOT = "data/labels/processed"
 # One partition directory per source dataset (mirrors data/labels/raw/<dataset>/).
 KNOWN_DATASETS = frozenset(
     {
-        "BioSCape_VegPlots_Berg_Eerste_2425",
         "mapwaps_olifants_doring",
         "mapwaps_tugela",
         "mapwaps_umzimvubu",
@@ -120,9 +118,8 @@ def write_partition(
 
     Concatenates new rows with any existing rows in the dataset partition,
     deduplicates on ``obs_id`` (keeping max ``ingested_at``), and writes the
-    result back. Re-running the same ingest is idempotent. Multiple sources
-    (e.g. BioSCape line + plot) can write to the same dataset folder; the
-    ``source`` column keeps them distinct.
+    result back. Re-running the same ingest is idempotent. Multiple sources can
+    write to the same dataset folder; the ``source`` column keeps them distinct.
 
     Writes to a ``_tmp_<run_id>/`` file first, then ``os.replace`` into place
     so readers never see a torn partition.

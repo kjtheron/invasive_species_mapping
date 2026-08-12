@@ -45,9 +45,20 @@ def test_lulc_native_and_transformed_map_to_members() -> None:
 
 
 def test_lulc_unmapped_classes_drop() -> None:
-    # shadow / transient / indigenous-fern / unspecific → no member, dropped at ingest
-    for cls in ("Shade", "Burnt", "Bracken", "Alien_Other"):
+    # shadow artefact / unspecific alien → no member, dropped at ingest
+    for cls in ("Shade", "Alien_Other"):
         assert _lulc_to_taxon(cls) == (None, "functional")
+
+
+def test_burnt_and_bracken_are_landcover_not_taxa() -> None:
+    """Both became classes on 2026-08-12. Rank must NOT be species/genus.
+
+    ``sanlc.py`` buffers around every species/genus row to exclude land-cover points
+    near a known IAP. Bracken is indigenous, so tagging it as a taxon would wrongly
+    suppress SANLC points around it.
+    """
+    assert _lulc_to_taxon("Burnt") == ("burnt", "landcover")
+    assert _lulc_to_taxon("Bracken") == ("bracken", "landcover")
 
 
 def test_every_mapped_class_resolves_under_landcover() -> None:

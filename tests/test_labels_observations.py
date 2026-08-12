@@ -22,7 +22,7 @@ def _make_gdf(rows: list[dict]) -> gpd.GeoDataFrame:
     """Minimal GeoDataFrame with all required schema columns."""
     base = {
         "obs_id": None,
-        "source": "bioscape_plot",
+        "source": "mapwaps",
         "source_record_id": "0",
         "source_url": None,
         "species": None,
@@ -64,10 +64,10 @@ def test_upsert_same_obs_id_keeps_latest() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
 
-        write_partition(gdf_first, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
-        write_partition(gdf_second, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run2")
+        write_partition(gdf_first, "mapwaps_olifants_doring", root=root, run_id="run1")
+        write_partition(gdf_second, "mapwaps_olifants_doring", root=root, run_id="run2")
 
-        files = list(Path(f"{root}/BioSCape_VegPlots_Berg_Eerste_2425").glob("*.parquet"))
+        files = list(Path(f"{root}/mapwaps_olifants_doring").glob("*.parquet"))
         assert len(files) == 1, "should be exactly one partition file after upsert"
 
         df = pd.read_parquet(str(files[0]))
@@ -87,9 +87,9 @@ def test_upsert_distinct_obs_ids_both_retained() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
+        write_partition(gdf, "mapwaps_olifants_doring", root=root, run_id="run1")
 
-        files = list(Path(f"{root}/BioSCape_VegPlots_Berg_Eerste_2425").glob("*.parquet"))
+        files = list(Path(f"{root}/mapwaps_olifants_doring").glob("*.parquet"))
         df = pd.read_parquet(str(files[0]))
         assert len(df) == 2
 
@@ -101,9 +101,9 @@ def test_read_all_ignores_root_level_parquet() -> None:
     gdf = _make_gdf([{"obs_id": "x:1", "source_record_id": "1"}])
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
+        write_partition(gdf, "mapwaps_olifants_doring", root=root, run_id="run1")
         # drop a stray non-partition parquet directly under root (like summary.parquet)
-        pd.DataFrame({"source": ["bioscape_plot"], "n": [1]}).to_parquet(f"{root}/summary.parquet")
+        pd.DataFrame({"source": ["mapwaps"], "n": [1]}).to_parquet(f"{root}/summary.parquet")
 
         df = read_all(root)
         assert len(df) == 1 and set(df["obs_id"]) == {"x:1"}
@@ -119,10 +119,10 @@ def test_upsert_idempotent() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = f"{tmp}/obs"
-        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run1")
-        write_partition(gdf, "BioSCape_VegPlots_Berg_Eerste_2425", root=root, run_id="run2")
+        write_partition(gdf, "mapwaps_olifants_doring", root=root, run_id="run1")
+        write_partition(gdf, "mapwaps_olifants_doring", root=root, run_id="run2")
 
-        files = list(Path(f"{root}/BioSCape_VegPlots_Berg_Eerste_2425").glob("*.parquet"))
+        files = list(Path(f"{root}/mapwaps_olifants_doring").glob("*.parquet"))
         df = pd.read_parquet(str(files[0]))
         assert len(df) == 2, "re-ingest of same rows should remain at 2"
 

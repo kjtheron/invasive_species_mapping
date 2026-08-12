@@ -125,9 +125,40 @@ def test_real_schema_round_trip():
     schema = repo_root / "configs" / "labels_schema.yaml"
     if not schema.exists():
         pytest.skip("real schema not present")
-    cm = build_lookup(schema, "western_cape_iap")
-    assert cm.resolve("Acacia mearnsii") == 0
-    assert cm.resolve("Acacia cyclops") == 1
-    assert cm.resolve("Pinus halepensis") == 4  # member of pinus_spp
-    assert cm.resolve("Eucalyptus diversicolor") == 5  # genus fallback
-    assert cm.resolve("Hakea drupacea") is None  # hakea has no genus_fallback
+    cm = build_lookup(schema, "sa_landcover")
+    assert cm.resolve("Acacia") == 0  # the bare genus MapWAPS emits
+    assert cm.resolve("Acacia mearnsii") == 0  # genus fallback covers binomials too
+    assert cm.resolve("Pinus") == 1
+    assert cm.resolve("Eucalyptus diversicolor") == 2  # genus fallback
+    assert cm.resolve("water") == 17  # land-cover token
+    assert cm.resolve("Solanum mauritianum") is None  # unlisted genus
+
+
+def test_warn_unmapped_names_the_gaps(tmp_path, caplog):
+    """An emitted value with no class is named, not counted."""
+    from cmrv.labels.classmap import warn_unmapped
+
+    schema = tmp_path / "s.yaml"
+    schema.write_text(
+        "default_class_map: m\n"
+        "class_maps:\n"
+        "  m:\n"
+        "    0: {name: pinus_spp, members: ['Pinus'], genus_fallback: true, genus: pinus}\n"
+        "    1: {name: water, members: ['water']}\n"
+    )
+    unmapped = warn_unmapped(
+        ["Pinus", "Pinus radiata", "water", "Solanum mauritianum", None, ""],
+        source="test",
+        schema_path=schema,
+    )
+    assert unmapped == ["Solanum mauritianum"]  # genus fallback keeps Pinus radiata
+
+
+def test_warn_unmapped_uses_schema_default(tmp_path):
+    """No class_map_name → fall back to the schema's default_class_map."""
+    from cmrv.labels.classmap import warn_unmapped
+
+    schema = tmp_path / "s.yaml"
+    schema.write_text("class_maps:\n  m:\n    0: {name: water, members: ['water']}\n")
+    with pytest.raises(KeyError, match="default_class_map"):
+        warn_unmapped(["water"], source="test", schema_path=schema)

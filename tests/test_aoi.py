@@ -30,3 +30,21 @@ def test_build_tile_grid_accepts_wgs84_aoi_and_reprojects():
     tiles = build_tile_grid(aoi_wgs, tile_km=10.0, crs="EPSG:32734")
     assert len(tiles) == 4
     assert tiles.crs is not None and tiles.crs.to_epsg() == 32734
+
+
+def test_province_of_slugs_match_admin1_zone_keys():
+    """Every ADM1 slug must be a key in pipeline.yaml's admin1_zone — else chips raise."""
+    import geopandas as gpd
+    import yaml
+
+    from cmrv.aoi import fetch_geoboundaries_adm1, province_of
+
+    adm1 = fetch_geoboundaries_adm1()
+    pts = gpd.GeoDataFrame(
+        geometry=[g.representative_point() for g in adm1.geometry], crs="EPSG:4326"
+    )
+    slugs = set(province_of(pts).dropna())
+    with open("configs/pipeline.yaml") as fh:
+        zones = yaml.safe_load(fh)["admin1_zone"]
+    assert len(slugs) == 9, slugs
+    assert slugs <= set(zones), f"unmapped provinces: {sorted(slugs - set(zones))}"

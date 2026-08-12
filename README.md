@@ -42,10 +42,9 @@ The model learns from **field surveys that measure cover or density**, not from 
 | Source | What it contributes |
 |---|---|
 | **MapWAPS** | ~36k field points across Olifants-Doring (WC), Tugela (KZN) and uMzimvubu (EC) — alien genera plus native and transformed land cover |
-| **BioSCape VegPlots** | Berg + Eerste catchment plots with per-species cover %, the only species-level signal in the set |
 | **SANLC + VegMap** | National land-cover accuracy-assessment points and biome boundaries — the native and transformed classes |
 
-Sources disagree on how precisely they name things: MapWAPS records "Alien Wattle", BioSCape records *Acacia mearnsii*. Every observation therefore carries its taxonomic rank, and the model trains at genus level, where the sources agree.
+Sources name things at different levels of precision — MapWAPS records "Alien Wattle", not *Acacia mearnsii* — so every observation carries its taxonomic rank and the model trains at genus level, where the sources agree. BioSCape VegPlots (Berg + Eerste, the only species-level source) was removed on 2026-08-12: the pre-embargo release carried 83 plots and no cover data. It returns when the full release lands.
 
 ## Repository layout
 
@@ -72,7 +71,6 @@ uv sync
 
 # Area of interest + tile grid
 uv run cmrv aoi-sa       # national boundary — the training extent
-uv run cmrv aoi-wc       # Western Cape — the map extent
 uv run cmrv aoi-tiles    # 10 km tile grid (the inference unit)
 ```
 
@@ -104,9 +102,8 @@ embed → train-head → infer
 
 | Verb | Purpose |
 |---|---|
-| `aoi-wc` / `aoi-sa` | Build the Western Cape or national boundary. |
+| `aoi-sa` | Build the national South Africa boundary. |
 | `aoi-tiles` | Build the tile grid used as the inference unit. |
-| `labels-bioscape-ingest` | BioSCape VegPlots (species-level, cover %). |
 | `labels-mapwaps-ingest` | MapWAPS field points across three catchments. |
 | `labels-sanlc-ingest` | SANLC accuracy points + VegMap biomes. |
 | `labels` | Inspect the observation store; preview filtered labels. |
@@ -121,18 +118,15 @@ embed → train-head → infer
 
 ```bash
 # A new label source just landed
-uv run cmrv labels-bioscape-ingest
+uv run cmrv labels-mapwaps-ingest
 uv run cmrv ingest-chips        # incremental — only new observations get chipped
 uv run cmrv chips-stats
 
-# Train the full land-cover model (alien genera + native + transformed)
+# Build the split (alien genera + native biomes + transformed cover)
 uv run cmrv make-split --class-map-name sa_landcover
-
-# Train on alien genera only, leaving everything else to the novelty flag
-uv run cmrv make-split --class-map-name western_cape_iap_genus
 ```
 
-Class definitions — which species roll up into which class — live in [configs/labels_schema.yaml](configs/labels_schema.yaml) and are the single source of truth. Adding a species to a class's `members[]` is all that's needed for the whole pipeline to pick it up.
+Class definitions — which genera and cover types roll up into which class — live in [configs/labels_schema.yaml](configs/labels_schema.yaml). Each adapter decides what it *ingests* from its own vocabulary dict, and ingest warns by name about anything the class map cannot place.
 
 ## Licence and attribution
 
