@@ -39,6 +39,19 @@ embed = [
     "zarr>=3.2.1",
 ]
 
+# CPU-only torch. The default Linux wheel bundles the CUDA 12.8 runtime (~15
+# nvidia-* packages, ~2 GB) which this box cannot use: the GTX 950M is Maxwell
+# (sm_50, dropped from recent CUDA wheels) with too little VRAM for a 201 M-param
+# forward. Every verb already defaults to device="cpu". Drop this block and
+# re-lock if a usable GPU ever appears.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
 [project.scripts]
 cmrv = "cmrv.cli:main"
 
