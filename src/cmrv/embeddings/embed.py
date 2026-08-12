@@ -16,12 +16,12 @@ from __future__ import annotations
 import os
 
 import numpy as np
-import pandas as pd
-import rasterio
-import torch
-import xarray as xr
-from loguru import logger
-from torch.utils.data import DataLoader, Dataset
+import pandas as pd  # type: ignore
+import rasterio  # type: ignore
+import torch  # type: ignore
+import xarray as xr  # type: ignore
+from loguru import logger  # type: ignore
+from torch.utils.data import DataLoader, Dataset  # type: ignore
 
 from cmrv.embeddings.constants import MONTH_DOY
 from cmrv.embeddings.universat import UniverSatEmbedder

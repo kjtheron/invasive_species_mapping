@@ -10,7 +10,7 @@ Requires the ``embed`` dependency group (``torch`` + torch.hub deps).
 from __future__ import annotations
 
 import numpy as np
-import torch
+import torch  # type: ignore
 
 
 class UniverSatEmbedder:

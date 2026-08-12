@@ -10,9 +10,9 @@ precision/recall/F1 on the held-out test fold. Everything is in memory.
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
-import xarray as xr
-from loguru import logger
+import pandas as pd  # type: ignore
+import xarray as xr  # type: ignore
+from loguru import logger  # type: ignore
 
 
 def _per_class_prf(y_true: np.ndarray, y_pred: np.ndarray, class_ids: np.ndarray):
@@ -79,7 +79,7 @@ def _ood_stats(
 
 def _build_model(arch: str, in_dim: int, k: int, hidden: int):
     """Linear or 1-hidden-layer MLP — shared by training and the inference reload."""
-    import torch
+    import torch  # type: ignore
 
     if arch == "linear":
         return torch.nn.Linear(in_dim, k)
@@ -111,7 +111,7 @@ def train_head(
     ``save`` writes a checkpoint (weights + standardization mu/sd + class ids) for
     wall-to-wall inference — reload with ``load_head``.
     """
-    import torch
+    import torch  # type: ignore
 
     ds = xr.open_zarr(emb_uri)
     emb = ds["emb"].values.astype("float32")
@@ -200,7 +200,7 @@ def train_head(
 
 def load_head(ckpt_path: str):
     """Load a saved head → ``(model.eval(), mu, sd, class_ids, ood)`` for inference."""
-    import torch
+    import torch  # type: ignore
 
     ck = torch.load(ckpt_path, weights_only=False)
     model = _build_model(ck["arch"], ck["in_dim"], len(ck["classes"]), ck["hidden"])
@@ -216,7 +216,7 @@ def predict_probs(model, mu, sd, ood: dict, x: np.ndarray):
     cutoff (``>0.5`` ⇒ novel / not-IAP). Returns full probs so overlapping inference
     windows can be blended before the argmax.
     """
-    import torch
+    import torch  # type: ignore
 
     xstd = ((x - mu) / sd).astype("float32")
     with torch.no_grad():

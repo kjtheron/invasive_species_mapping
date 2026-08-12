@@ -1,7 +1,7 @@
 """Shared constants for the embedding stage.
 
 Chip-stack convention: float32 ``(N, T, C, H, W)`` — N chips, T months, C bands
-(10), H×W pixels at native 10 m. ``dates`` is ``(N, T)`` day-of-year ints.
+(10), HxW pixels at native 10 m. ``dates`` is ``(N, T)`` day-of-year ints.
 
 Kept torch-free so ``infer`` and the config tests can import it without the
 ``embed`` dependency group.
