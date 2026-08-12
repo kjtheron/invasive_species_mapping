@@ -17,8 +17,7 @@ aoi:
 # Red-edge bands (B05–B07, B8A) carry most of the discriminatory signal in both sets.
 # The temporal head masks any month with no cloud-free composite.
 months_by_zone:
-  # Western Cape / Northern Cape — Mediterranean winter rainfall, NOT the
-  # summer-rainfall calendar of most SA literature.
+  # Western Cape / Northern Cape — Mediterranean winter rainfall
   #   feb — peak dry-summer trough: evergreen Pinus/Eucalyptus/Hakea stand out
   #         against the senesced fynbos/herbaceous matrix.
   #   may — autumn transition (non-flowering baseline; green-down).
