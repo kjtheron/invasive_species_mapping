@@ -129,6 +129,14 @@ def train_head(
         d = df[df["fold"] == name]
         return emb[d["row"].to_numpy()], d["class_id"].map(to_idx).to_numpy().astype(np.int64)
 
+    # Source of each test row, for the per-source breakdown below. Older splits have
+    # no `source` column; fall back to the obs_id prefix every adapter writes.
+    te_src = (
+        df[df["fold"] == "test"]["source"]
+        if "source" in df.columns
+        else df[df["fold"] == "test"]["obs_id"].astype(str).str.split(":").str[0]
+    ).to_numpy()
+
     xtr, ytr = fold("train")
     xva, yva = fold("val")
     xte, yte = fold("test")
@@ -170,10 +178,28 @@ def train_head(
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        per, macro = _per_class_prf(yte, model(xte_t).argmax(1).numpy(), classes)
+        pred = model(xte_t).argmax(1).numpy()
+    per, macro = _per_class_prf(yte, pred, classes)
     logger.success(
         "{} head ({} CE): val macro-F1 {:.3f} | test macro-F1 {:.3f}", arch, weight, best_f1, macro
     )
+
+    # Per-source test metrics. NIAPS is a Sentinel-2 extrapolation, so a score against
+    # it measures agreement with ARC's classifier, not accuracy — the gap between an
+    # observed source (mapwaps) and a distilled one is the distillation error, and it
+    # is the number worth watching. Never quote the blended figure alone.
+    if len(te_src) == len(yte):
+        for src in sorted(set(te_src)):
+            m = te_src == src
+            if m.sum():
+                _, f1 = _per_class_prf(yte[m], pred[m], classes)
+                logger.info(
+                    "  test macro-F1 [{}]: {:.3f}  ({} obs, {} classes)",
+                    src,
+                    f1,
+                    int(m.sum()),
+                    len(set(yte[m])),
+                )
     if save:
         from cmrv.io import ensure_parent
 

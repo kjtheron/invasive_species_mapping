@@ -28,6 +28,7 @@ PROCESSED_ROOT = "data/labels/processed"
 KNOWN_DATASETS = frozenset(
     {
         "mapwaps_olifants_doring",
+        "niaps_2023",
         "mapwaps_tugela",
         "mapwaps_umzimvubu",
         "sanlc_accuracy_points",

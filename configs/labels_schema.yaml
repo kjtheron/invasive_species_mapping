@@ -57,3 +57,12 @@ class_maps:
     21: {name: populus_spp,   members: ["Populus"],    genus_fallback: true, genus: populus}
     22: {name: burnt,           members: ["burnt"]}
     23: {name: bracken,         members: ["bracken"]}   # Pteridium aquilinum — native
+    # --- added 2026-08-12 for NIAPS 2023: alien trees/shrubs absent from the field
+    # sources. Counts are small (Melia 123, Opuntia 137, Solanum 332, Lantana 1230
+    # surviving cores) — kept rather than capped, with a balanced loss at train time.
+    # Arundo donax (tall grass) and Chromolaena odorata (perennial herb) are NOT here:
+    # dropped on growth form, neither is a woody canopy at 10 m.
+    24: {name: lantana_spp,   members: ["Lantana camara"],      genus_fallback: true, genus: lantana}
+    25: {name: melia_spp,     members: ["Melia azedarach"],     genus_fallback: true, genus: melia}
+    26: {name: solanum_spp,   members: ["Solanum mauritianum"], genus_fallback: true, genus: solanum}
+    27: {name: opuntia_spp,   members: ["Opuntia"],             genus_fallback: true, genus: opuntia}

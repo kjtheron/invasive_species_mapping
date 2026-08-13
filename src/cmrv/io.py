@@ -14,7 +14,7 @@ from typing import Any
 import geopandas as gpd  # type: ignore
 import numpy as np
 import pandas as pd  # type: ignore
-import rasteriov  # type: ignore
+import rasterio  # type: ignore
 import yaml
 from rasterio.crs import CRS  # type: ignore
 from rio_cogeo.cogeo import cog_translate  # type: ignore

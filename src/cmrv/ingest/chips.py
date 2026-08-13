@@ -1183,8 +1183,16 @@ def make_split(
         _save_block_folds(block_to_fold, f"{out_prefix}/block_folds.parquet")
         # one-row-per-obs split artifact (obs_id → fold, class_id) — the head reads
         # this directly so it never re-derives class assignment from the schema.
-        cols = ["obs_id", "fold"] + (["class_id"] if "class_id" in manifest.columns else [])
-        write_parquet_df(manifest.drop_duplicates("obs_id")[cols], f"{out_prefix}/split.parquet")
+        # `source` rides along so train-head can score each source separately. Every
+        # adapter writes obs_id as "<source>:...", so this needs no store read. It
+        # matters because a distilled source (NIAPS) scored against itself only
+        # measures agreement with the rule that generated it.
+        one = manifest.drop_duplicates("obs_id").copy()
+        one["source"] = one["obs_id"].astype(str).str.split(":").str[0]
+        cols = ["obs_id", "fold", "source"] + (
+            ["class_id"] if "class_id" in manifest.columns else []
+        )
+        write_parquet_df(one[cols], f"{out_prefix}/split.parquet")
 
     for fold in ["train", "val", "test"]:
         sub = manifest[manifest["fold"] == fold]

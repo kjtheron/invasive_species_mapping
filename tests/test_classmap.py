@@ -131,7 +131,8 @@ def test_real_schema_round_trip():
     assert cm.resolve("Pinus") == 1
     assert cm.resolve("Eucalyptus diversicolor") == 2  # genus fallback
     assert cm.resolve("water") == 17  # land-cover token
-    assert cm.resolve("Solanum mauritianum") is None  # unlisted genus
+    assert cm.resolve("Solanum mauritianum") == 26  # added for NIAPS
+    assert cm.resolve("Arundo donax") is None  # tall grass — deliberately not a class
 
 
 def test_warn_unmapped_names_the_gaps(tmp_path, caplog):
@@ -147,11 +148,11 @@ def test_warn_unmapped_names_the_gaps(tmp_path, caplog):
         "    1: {name: water, members: ['water']}\n"
     )
     unmapped = warn_unmapped(
-        ["Pinus", "Pinus radiata", "water", "Solanum mauritianum", None, ""],
+        ["Pinus", "Pinus radiata", "water", "Arundo donax", None, ""],
         source="test",
         schema_path=schema,
     )
-    assert unmapped == ["Solanum mauritianum"]  # genus fallback keeps Pinus radiata
+    assert unmapped == ["Arundo donax"]  # genus fallback keeps Pinus radiata
 
 
 def test_warn_unmapped_uses_schema_default(tmp_path):

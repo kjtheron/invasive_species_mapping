@@ -19,6 +19,7 @@ from cmrv.ingest.chips import (
 from cmrv.io import load_config, read_gdf, write_gdf_parquet
 from cmrv.labels.mapwaps import CATCHMENTS, ingest_mapwaps
 from cmrv.labels.merge import load_training_labels
+from cmrv.labels.niaps import ingest_niaps
 from cmrv.labels.observations import PROCESSED_ROOT, write_summary
 from cmrv.labels.sanlc import ingest_sanlc
 
@@ -95,6 +96,29 @@ def labels_mapwaps_ingest(
     for key in keys:
         ingest_mapwaps(key, root=root)
     logger.success("mapwaps ingest complete — {} catchment(s)", len(keys))
+
+
+def labels_niaps_ingest(
+    min_density: int = 50,
+    min_area_ha: float = 1.0,
+    erode_m: float = 20.0,
+    root: str = PROCESSED_ROOT,
+) -> None:
+    """Distil NIAPS 2023 national IAP polygons → points in the store (source=niaps).
+
+    **These are not field observations.** Kotze et al. (2025) extrapolated 47,830 field
+    plots to all pixels by Sentinel-2 spectral matching, so training on them distils
+    ARC's classifier. Rows carry weight=0.5 and basis_of_record=NIAPS_S2_EXTRAPOLATED;
+    always report test metrics per source (`train-head` does).
+
+    Filters, in cost order: density → area → make-valid/explode → negative buffer
+    (also removes slivers) → drop cross-taxon overlaps → point_on_surface.
+    --min-density: gridcode (percent cover) floor. --erode-m: purity margin.
+    """
+    path = ingest_niaps(
+        min_density=min_density, min_area_ha=min_area_ha, erode_m=erode_m, root=root
+    )
+    logger.success("niaps ingest complete — {}", path)
 
 
 def labels_sanlc_ingest(
@@ -469,6 +493,7 @@ def main() -> None:
             "aoi-sa": aoi_sa,
             "aoi-tiles": aoi_tiles,
             "labels-mapwaps-ingest": labels_mapwaps_ingest,
+            "labels-niaps-ingest": labels_niaps_ingest,
             "labels-sanlc-ingest": labels_sanlc_ingest,
             "labels": labels_inspect,
             "chips-stats": chips_stats,
