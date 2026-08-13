@@ -142,8 +142,15 @@ def ingest_sanlc(
     root: str = PROCESSED_ROOT,
     run_id: str | None = None,
     pipeline: str = PIPELINE,
+    replace: bool = True,
 ) -> str:
-    """Ingest SANLC accuracy points + VegMap biome → ``source=sanlc`` store."""
+    """Ingest SANLC accuracy points + VegMap biome → ``source=sanlc`` store.
+
+    ``replace=True`` by default, unlike every other adapter. This one's output is a
+    function of the *whole store* — the IAP-exclusion buffer grows whenever another
+    source adds species/genus rows — so an upsert would keep points a stricter run has
+    since excluded, and the exclusion would silently do nothing.
+    """
     run_id = run_id or make_run_id(SOURCE)
     ingested_at = dt.datetime.now(tz=dt.UTC)
 
@@ -224,6 +231,6 @@ def ingest_sanlc(
 
     warn_unmapped({r["species_normalized"] for r in rows}, source=DATASET)
     out = gpd.GeoDataFrame(pd.DataFrame(rows), geometry=list(pts.geometry), crs="EPSG:4326")
-    path = write_partition(out, DATASET, root=root, run_id=run_id)
+    path = write_partition(out, DATASET, root=root, run_id=run_id, replace=replace)
     logger.success("sanlc: {} rows → {}", len(rows), path)
     return path

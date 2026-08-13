@@ -34,9 +34,14 @@ CATCHMENTS: dict[str, tuple[int, str]] = {
     "mapwaps_sabie_crocodile": (25050368, "mpumalanga"),
 }
 RAW = Path("data/labels/raw")
-# fetch only files whose name contains one of these (case-insensitive) — skips
-# the big AlienMap_*.zip rasters (the RF prediction map, not a training label).
-WANT = ("trainingdata", "metadata")
+# Fetch only files whose name contains one of these (case-insensitive). Skips the
+# big MAPWAPS_*.zip / *_classification_*.tif rasters — those are the RF prediction
+# map, not a training label; sampling a model's own output is not ground truth.
+# "train" not "trainingdata": the 2026-08-13 re-release renamed two catchments to
+# `uMzim_Train.zip` / `SabieCroc_Train.zip`, which the narrower prefix skipped in
+# silence — a filename filter that misses is indistinguishable from a dataset that
+# has no training data, which is exactly how Luvuvhu looked broken for months.
+WANT = ("train", "metadata")
 
 
 def _md5(path: Path) -> str:

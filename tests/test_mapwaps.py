@@ -142,3 +142,23 @@ def test_undated_point_uses_fallback_date() -> None:
         gdf, OLI, "r", dt.datetime(2026, 6, 24, tzinfo=dt.UTC), fallback_date="2025-05-19"
     )
     assert rows[0]["event_date"] == "2025-05-19"
+
+
+def test_every_registered_catchment_is_a_known_dataset() -> None:
+    """write_partition raises on an unknown dataset — catch it here, not mid-ingest."""
+    from cmrv.labels.observations import KNOWN_DATASETS
+
+    for key, cat in CATCHMENTS.items():
+        assert cat.dataset in KNOWN_DATASETS, f"{key} → {cat.dataset} not in KNOWN_DATASETS"
+
+
+def test_renamed_and_prefixed_taxa_agree() -> None:
+    """The 2026 re-release dropped the Alien_ prefix in two catchments, not the taxon."""
+    for bare, prefixed in [
+        ("Gum", "Alien_Gum"),
+        ("Pine", "Alien_Pine"),
+        ("Poplar", "Alien_Poplar"),
+        ("Lantana", "Alien_Lantana"),
+        ("Bugweed", "Alien_Bugweed"),
+    ]:
+        assert _lulc_to_taxon(bare) == _lulc_to_taxon(prefixed), bare

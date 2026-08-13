@@ -9,12 +9,27 @@ later by per-dataset **adapters** in `src/cmrv/labels/`.
 |---|---------|--------------|----------|-----|--------------|
 | 1 | MapWAPS Olifants-Doring | `10.25413/sun.29958053` | WC | `mapwaps.py` | `data/labels/raw/mapwaps_olifants_doring/` |
 | 2 | MapWAPS Tugela | `10.25413/sun.25066151` | KZN | `mapwaps.py` | `data/labels/raw/mapwaps_tugela/` |
-| 3 | MapWAPS uMzimvubu | `10.25413/sun.25050401` | EC | `mapwaps.py` | `data/labels/raw/mapwaps_umzimvubu/` |
-| 4 | NIAPS 2023 | DFFE / Working for Water | **all 9** | **manual** (`niaps.py` verifies) | `data/labels/raw/niaps_2023/` |
+| 3 | MapWAPS uMzimvubu | `10.25413/sun.25050401` | EC + KZN | `mapwaps.py` | `data/labels/raw/mapwaps_umzimvubu/` |
+| 4 | MapWAPS Luvuvhu | `10.25413/sun.25050314` | LP | `mapwaps.py` | `data/labels/raw/mapwaps_luvuvhu/` |
+| 5 | MapWAPS Sabie-Crocodile | `10.25413/sun.25050368` | MP | `mapwaps.py` | `data/labels/raw/mapwaps_sabie_crocodile/` |
+| 6 | NIAPS 2023 | DFFE / Working for Water | **all 9** | **manual** (`niaps.py` verifies) | `data/labels/raw/niaps_2023/` |
 
-All MapWAPS catchments CC-BY 4.0 (Olifants-Doring also flags CC-BY-SA ambiguity).
+All MapWAPS catchments are **CC-BY 4.0** — the old CC-BY-SA ambiguity on Olifants-Doring
+is gone as of the re-release.
 
-## 4. NIAPS 2023 — MANUAL (SharePoint browser login)
+> **MapWAPS re-release, 2026-08-13.** All four non-Olifants catchments were re-cut and
+> re-published as v1. **Luvuvhu and Sabie-Crocodile now carry their own data** — Luvuvhu
+> previously shipped Tugela's shapefile, Sabie-Crocodile an empty folder. Verified by
+> ADM1 join (Luvuvhu → 4,870 pts all Limpopo; Sabie-Croc → 4,467 all Mpumalanga), not by
+> trusting the filename.
+>
+> The re-release also renamed files, columns and classes, so re-download and re-ingest
+> rather than merging: `rm -rf data/labels/processed/mapwaps_*` first, because
+> `write_partition` upserts and would keep obs_ids from the superseded release.
+> Two catchments now ship `*_Train.zip` rather than `*_TrainingData.zip`, which the old
+> `WANT` prefix filter skipped **silently** — it is now `("train", "metadata")`.
+
+## NIAPS 2023 — MANUAL (SharePoint browser login)
 
 **N**ational **I**nvasive **A**lien **P**lant **S**urvey, DFFE / Working for Water.
 Aerial-survey polygons for **14 alien taxa across all of South Africa**, each carrying
@@ -45,13 +60,6 @@ kept verbatim at `data/labels/raw/niaps_2023/NIAPS_2023.txt`. Cite DFFE / Workin
 Water and Kotze et al. (2025); get a written licence before redistributing the data
 itself or claiming an open licence on derived weights.
 
-> **MapWAPS datasets omitted (broken upstream, verified 2026-07):**
-> **Luvuvhu** (`10.25413/sun.25050314`) — its `TrainingData.zip` ships the *Tugela*
-> shapefile by mistake (identical 5267 rows, folder named `Trainingdata_Tugela`),
-> so it carries no Luvuvhu data. **Sabie-Crocodile** (`10.25413/sun.25050368`) —
-> `TrainingData.zip` contains only a metadata PDF and an empty folder (no shapefile).
-> Both are wired in `download/mapwaps.py`'s registry; re-enable if the authors re-upload.
-
 ## Run
 
 ```bash
@@ -59,7 +67,7 @@ python3 download/mapwaps.py                     # all catchments, figshare API, 
 python3 download/mapwaps.py mapwaps_tugela      # one catchment
 ```
 
-Only the field **TrainingData** + metadata are fetched; the large `AlienMap_*`
+Only the field **training data** + metadata are fetched; the large `MAPWAPS_*.zip`
 rasters (the RF prediction map — not a training label) are skipped. 
 Then `uv run cmrv labels-mapwaps-ingest` (all catchments).
 

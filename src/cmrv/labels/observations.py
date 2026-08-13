@@ -27,7 +27,9 @@ PROCESSED_ROOT = "data/labels/processed"
 
 KNOWN_DATASETS = frozenset(
     {
+        "mapwaps_luvuvhu",
         "mapwaps_olifants_doring",
+        "mapwaps_sabie_crocodile",
         "niaps_2023",
         "mapwaps_tugela",
         "mapwaps_umzimvubu",
@@ -114,13 +116,19 @@ def write_partition(
     dataset: str,
     root: str = PROCESSED_ROOT,
     run_id: str | None = None,
+    replace: bool = False,
 ) -> str:
-    """Atomic partition overwrite with upsert semantics, keyed by source dataset.
+    """Atomic partition write, keyed by source dataset. Upsert by default.
 
-    Concatenates new rows with any existing rows in the dataset partition,
-    deduplicates on ``obs_id`` (keeping max ``ingested_at``), and writes the
-    result back. Re-running the same ingest is idempotent. Multiple sources can
-    write to the same dataset folder; the ``source`` column keeps them distinct.
+    Default (``replace=False``) concatenates new rows with any existing rows and
+    deduplicates on ``obs_id`` (keeping max ``ingested_at``), so re-running the same
+    ingest is idempotent. Multiple sources can write to the same dataset folder; the
+    ``source`` column keeps them distinct.
+
+    **Upsert can only ever grow a partition.** Rows a stricter re-run no longer emits
+    are simply not touched, so a tightened filter appears to work and changes nothing.
+    Pass ``replace=True`` when the adapter's output is a *function of other data* — as
+    `sanlc.py`'s IAP-exclusion buffer is — so a re-run must be able to shrink.
 
     Writes to a ``_tmp_<run_id>/`` file first, then ``os.replace`` into place
     so readers never see a torn partition.
@@ -132,29 +140,40 @@ def write_partition(
 
     new = to_obs_gdf(gdf)
     existing_files = list_parquet_files(partition_dir)
+    # Read the old rows even when replacing — it costs little at partition scale and
+    # buys the row delta below, which is the number that was previously invisible.
     frames = [gpd.read_parquet(f) for f in existing_files]
     n_existing = sum(len(f) for f in frames)
 
-    combined = pd.concat([*frames, new], ignore_index=True)
-    merged = gpd.GeoDataFrame(
-        combined.sort_values("ingested_at").drop_duplicates("obs_id", keep="last"),
-        geometry="geometry",
-        crs="EPSG:4326",
-    )
+    if replace:
+        merged = new
+    else:
+        combined = pd.concat([*frames, new], ignore_index=True)
+        merged = gpd.GeoDataFrame(
+            combined.sort_values("ingested_at").drop_duplicates("obs_id", keep="last"),
+            geometry="geometry",
+            crs="EPSG:4326",
+        )
 
     tmp_file = f"{partition_dir}/_tmp_{run_id}/part-{run_id}.parquet"
     final_file = f"{partition_dir}/part-{run_id}.parquet"
     ensure_parent(tmp_file)
     merged.to_parquet(tmp_file, write_covering_bbox=True)  # native GeoParquet + bbox pushdown
 
-    logger.info(
-        "dataset={} new={} existing={} merged={} (dedupe kept {})",
-        dataset,
-        len(new),
-        n_existing,
-        n_existing + len(new),
-        len(merged),
-    )
+    if replace:
+        delta = len(merged) - n_existing
+        logger.info(
+            "dataset={} REPLACE: {} → {} rows ({:+d})", dataset, n_existing, len(merged), delta
+        )
+    else:
+        logger.info(
+            "dataset={} new={} existing={} merged={} (dedupe kept {})",
+            dataset,
+            len(new),
+            n_existing,
+            n_existing + len(new),
+            len(merged),
+        )
 
     # Atomic promote: remove prior partition files then move the new one in.
     for old_file in existing_files:

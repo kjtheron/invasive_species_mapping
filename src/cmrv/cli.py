@@ -123,14 +123,20 @@ def labels_niaps_ingest(
 
 def labels_sanlc_ingest(
     root: str = PROCESSED_ROOT,
+    replace: bool = True,
 ) -> None:
     """Ingest SANLC 2018/2020/2022 accuracy-assessment points + VegMap 2024 → store.
 
     Field-verified land-cover reference points → our classes (natural points named
     by VegMap biome); identical points across years de-duplicated; known-IAP areas
     excluded. Feeds the unified ``sa_landcover`` class map at make-split.
+
+    **Run this LAST.** The 320 m IAP-exclusion buffer is built from every species/genus
+    row in the store, so it grows each time another source lands. ``--replace`` (on by
+    default) rewrites the partition rather than upserting, so a re-run can actually
+    *drop* points that are now inside the buffer. Pass ``--no-replace`` to merge instead.
     """
-    path = ingest_sanlc(root=root)
+    path = ingest_sanlc(root=root, replace=replace)
     logger.success("sanlc ingest complete — {}", path)
 
 

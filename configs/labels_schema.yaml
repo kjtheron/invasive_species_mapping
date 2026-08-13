@@ -66,3 +66,5 @@ class_maps:
     25: {name: melia_spp,     members: ["Melia azedarach"],     genus_fallback: true, genus: melia}
     26: {name: solanum_spp,   members: ["Solanum mauritianum"], genus_fallback: true, genus: solanum}
     27: {name: opuntia_spp,   members: ["Opuntia"],             genus_fallback: true, genus: opuntia}
+    # MapWAPS Sabie-Crocodile "Alien_Yellow Bells" — NEMBA 1b woody shrub/small tree.
+    28: {name: tecoma_spp,    members: ["Tecoma stans"],        genus_fallback: true, genus: tecoma}

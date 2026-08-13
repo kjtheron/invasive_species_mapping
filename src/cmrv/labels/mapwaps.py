@@ -50,8 +50,8 @@ COORD_UNCERTAINTY_M = 15.0
 # MapWAPS class string → (species_normalized, taxon_rank) for the
 # ``sa_landcover`` map. Union across all catchments. Alien_* → IAP genus;
 # native veg → VegMap-biome member; transformed → land-cover member. Classes NOT here
-# are dropped at ingest: "Shade" (shadow artefact) and "Alien_Other" (unspecific
-# alien — no genus to assign).
+# are dropped at ingest: "Shade" (shadow artefact), plus "Alien_Other" and "Other
+# Invasive Alien Plants" (unspecific aliens — no genus to assign, so no class).
 _LULC_TO_CLASS: dict[str, tuple[str, str]] = {
     # --- alien invasive trees → IAP genus (survey didn't resolve to species) ---
     "Alien_Pine": ("Pinus", "genus"),
@@ -61,6 +61,19 @@ _LULC_TO_CLASS: dict[str, tuple[str, str]] = {
     "Alien_Silver Wattle": ("Acacia", "genus"),  # A. dealbata (uMzimvubu)
     "Alien_Prosopis": ("Prosopis", "genus"),
     "Alien_Poplar": ("Populus", "genus"),  # Populus × canescens
+    # The 2026-08-13 re-release is inconsistent across catchments: Tugela and Luvuvhu
+    # use bare names where uMzimvubu and Sabie-Croc keep the Alien_ prefix. Same taxa.
+    "Wattle": ("Acacia", "genus"),
+    "Gum": ("Eucalyptus", "genus"),
+    "Pine": ("Pinus", "genus"),
+    "Poplar": ("Populus", "genus"),
+    "Lantana": ("Lantana camara", "species"),
+    "Alien_Lantana": ("Lantana camara", "species"),
+    # "Bugweed" is the South African common name for Solanum mauritianum.
+    "Bugweed": ("Solanum mauritianum", "species"),
+    "Alien_Bugweed": ("Solanum mauritianum", "species"),
+    # Tecoma stans — yellow bells, a NEMBA 1b woody shrub / small tree. New taxon.
+    "Alien_Yellow Bells": ("Tecoma stans", "species"),
     # --- native biomes / vegetation → VegMap-biome member ---
     "Fynbos-High density": ("fynbos", "biome"),
     "Fynbos - Low density": ("fynbos", "biome"),
@@ -72,6 +85,8 @@ _LULC_TO_CLASS: dict[str, tuple[str, str]] = {
     "Indigenous Bush_Other": ("savanna", "biome"),  # native woody non-forest
     "Indigenous Bush_Vachellia": ("savanna", "biome"),  # thornveld (Vachellia)
     "Indigenous Bush_Leucosidea": ("savanna", "biome"),  # montane scrub (Leucosidea)
+    "Indigenous Bush": ("savanna", "biome"),  # unqualified — same class as _Other
+    "Indigenous Bush_Mopane": ("savanna", "biome"),  # mopane veld ⊂ savanna
     "Riparian Bush": ("azonal", "biome"),  # riparian = azonal (intrazonal) vegetation
     "Riparian Trees": ("azonal", "biome"),
     # --- transformed / land cover ---
@@ -86,6 +101,15 @@ _LULC_TO_CLASS: dict[str, tuple[str, str]] = {
     "Wetland - Reed": ("wetland", "landcover"),
     "Wetland_Other": ("wetland", "landcover"),
     "Wetland - Palmiet": ("wetland", "landcover"),
+    # Permanent crops from the subtropical Luvuvhu / Sabie-Crocodile catchments. All
+    # are cultivated land; the map has no orchard class and does not need one.
+    "Orchards": ("cultivated", "landcover"),
+    "Orchards_Banana": ("cultivated", "landcover"),
+    "Orchards_Nuts": ("cultivated", "landcover"),
+    "Orchards_Other": ("cultivated", "landcover"),
+    "Bananas": ("cultivated", "landcover"),
+    "Macadamias": ("cultivated", "landcover"),
+    "Tea": ("cultivated", "landcover"),
     # --- other cover states ---
     # Bracken is Pteridium aquilinum — a taxon, but deliberately NOT rank species/genus:
     # that rank marks IAP observations, and `sanlc.py` buffers around them to exclude
@@ -112,7 +136,33 @@ class Catchment:
     license: str
 
 
-_CCBY = "CC-BY-4.0"
+_LICENSE = "CC-BY-4.0 (SUNScholar/figshare); cite the DOI"
+
+
+def _cat(dataset, shp, class_col, date_col, admin1, campaign, doi_id):
+    """One 2026-re-release catchment — they share every field except these six.
+
+    All four declare their own UTM CRS, name the density column ``Density``, and are
+    CC-BY-4.0, so only the varying parts are spelled out at the call site.
+    """
+    return Catchment(
+        dataset=dataset,
+        shp=shp,
+        class_col=class_col,
+        density_col="Density",
+        date_col=date_col,
+        src_crs=None,  # every 2026 shapefile declares a CRS
+        aoi_admin1=admin1,
+        campaign_date=campaign,
+        doi=f"10.25413/sun.{doi_id}",
+        url=f"https://doi.org/10.25413/sun.{doi_id}",
+        license=_LICENSE,
+    )
+
+
+# The 2026-08-13 re-release re-cut all four non-Olifants catchments: new filenames,
+# renamed columns, declared CRSs, and Luvuvhu / Sabie-Crocodile finally carrying their
+# own data. ``aoi_admin1`` here is only the fallback — ingest derives it per point.
 CATCHMENTS: dict[str, Catchment] = {
     "mapwaps_olifants_doring": Catchment(
         dataset="mapwaps_olifants_doring",
@@ -121,37 +171,47 @@ CATCHMENTS: dict[str, Catchment] = {
         density_col="Density___",
         date_col="DateTime",
         src_crs=None,
-        aoi_admin1="western_cape",
-        campaign_date="2023-01-01",
+        aoi_admin1="western_cape",  # ~17 % of it is actually Northern Cape
+        campaign_date="2025-05-19",  # DateTime 2025-05-17..22 — a sync batch, not 6 field days
         doi="10.25413/sun.29958053",
         url="https://doi.org/10.25413/sun.29958053",
-        license="CC-BY-4.0 / CC-BY-SA (ambiguous); co-authorship offer expected for academic use",
+        license=_LICENSE,
     ),
-    "mapwaps_tugela": Catchment(
-        dataset="mapwaps_tugela",
-        shp="MapWAPS_Tugela_TrainingData/Trainingdata_Tugela_18Classes/Trainingdata_Tugela_18Classes.shp",
-        class_col="LULC_Class",
-        density_col="IAP_Densit",
-        date_col=None,  # shapefile carries no survey date
-        src_crs=None,  # already EPSG:4326
-        aoi_admin1="kwazulu_natal",
-        campaign_date="2023-01-01",  # ponytail: MapWAPS Tugela campaign ~2023; refine from metadata
-        doi="10.25413/sun.25066151",
-        url="https://doi.org/10.25413/sun.25066151",
-        license=_CCBY,
+    "mapwaps_tugela": _cat(
+        "mapwaps_tugela",
+        "Tugela_TrainingData/Tugela_TrainingData.shp",
+        "LULC_Class",
+        "Date_Capt",
+        "kwazulu_natal",
+        "2023-10-26",  # observed 2023-10-12..26
+        "25066151",
     ),
-    "mapwaps_umzimvubu": Catchment(
-        dataset="mapwaps_umzimvubu",
-        shp="MapWAPS_uMzimvubu_TrainingData/TrainingData_uMzim_18Classes/TrainingData_uMzim_18Classes.shp",
-        class_col="LULC",
-        density_col="Density",
-        date_col="DateTime",
-        src_crs="EPSG:32735",  # UTM 35S; shapefile declares no CRS
-        aoi_admin1="eastern_cape",
-        campaign_date="2023-05-19",  # observed DateTime range 2023-05-19..06-06
-        doi="10.25413/sun.25050401",
-        url="https://doi.org/10.25413/sun.25050401",
-        license=_CCBY,
+    "mapwaps_umzimvubu": _cat(
+        "mapwaps_umzimvubu",
+        "uMzim_Train.shp",
+        "LULC",
+        "DateTime",
+        "eastern_cape",  # ~17 % is KwaZulu-Natal
+        "2023-06-06",  # observed 2023-05-19..06-06
+        "25050401",
+    ),
+    "mapwaps_luvuvhu": _cat(
+        "mapwaps_luvuvhu",
+        "Luvuvhu_TrainingData/Luvuvhu_TrainingData.shp",
+        "LULC",
+        "DateTime",
+        "limpopo",
+        "2023-07-27",  # observed 2023-07-18..30
+        "25050314",
+    ),
+    "mapwaps_sabie_crocodile": _cat(
+        "mapwaps_sabie_crocodile",
+        "SabieCroc_Train.shp",
+        "LULC_Class",
+        None,  # shapefile carries no survey date
+        "mpumalanga",
+        "2023-07-01",  # ponytail: undated; mid-2023 to match the neighbouring catchments
+        "25050368",
     ),
 }
 

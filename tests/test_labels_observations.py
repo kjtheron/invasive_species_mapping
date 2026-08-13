@@ -136,3 +136,23 @@ def test_missing_required_column_raises() -> None:
     )
     with pytest.raises(ValueError, match="missing required"):
         to_obs_gdf(gdf)
+
+
+def test_replace_can_shrink_a_partition(tmp_path):
+    """Upsert can only grow a partition; replace must be able to drop rows.
+
+    The failure this guards: `sanlc`'s IAP-exclusion buffer grew when NIAPS landed, the
+    re-run correctly excluded 186 more points, and the store did not change — because
+    upsert never touches rows the new run stopped emitting.
+    """
+    root = str(tmp_path)
+    ds = "mapwaps_olifants_doring"
+    write_partition(_make_gdf([{"obs_id": o} for o in ("a", "b", "c")]), ds, root=root, run_id="r1")
+
+    write_partition(_make_gdf([{"obs_id": "a"}]), ds, root=root, run_id="r2")
+    kept = gpd.read_parquet(next(Path(f"{root}/{ds}").glob("*.parquet")))
+    assert set(kept["obs_id"]) == {"a", "b", "c"}, "upsert must not drop rows"
+
+    write_partition(_make_gdf([{"obs_id": "a"}]), ds, root=root, run_id="r3", replace=True)
+    after = gpd.read_parquet(next(Path(f"{root}/{ds}").glob("*.parquet")))
+    assert set(after["obs_id"]) == {"a"}, "replace must drop the excluded rows"
