@@ -39,10 +39,22 @@ The seasonal timing does real work. In the winter-rainfall Western Cape the mode
 
 The model learns from **field surveys that measure cover or density**, not from opportunistic occurrence records. A GPS point marking a single tree tells you almost nothing about a 10 m pixel that is mostly something else, so presence-only records are deliberately excluded.
 
-| Source | What it contributes |
-|---|---|
-| **MapWAPS** | ~36k field points across Olifants-Doring (WC), Tugela (KZN) and uMzimvubu (EC) — alien genera plus native and transformed land cover |
-| **SANLC + VegMap** | National land-cover accuracy-assessment points and biome boundaries — the native and transformed classes |
+| Source | Rows | What it contributes |
+|---|---|---|
+| **MapWAPS** | 46,161 | Field points across five catchments — Olifants-Doring (WC+NC), Tugela (KZN), uMzimvubu (EC+KZN), Luvuvhu (LP), Sabie-Crocodile (MP). Alien genera plus native and transformed land cover. CC-BY 4.0 |
+| **NIAPS 2023** | 58,423 | National alien-plant survey, 14 taxa, with percent density. **Distilled, not observed** — see below |
+| **SANLC + VegMap** | 8,475 | National land-cover accuracy-assessment points and biome boundaries — the native and transformed classes |
+
+**113,059 observations across all nine provinces.**
+
+⚠️ **NIAPS is a Sentinel-2 extrapolation, not field observation.** Kotzé et al. (2025)
+took 47,830 surveyed plots and assigned every spectrally matching pixel the same taxon
+and cover. Training a Sentinel-2 model on that distils their classifier rather than
+learning from the ground, and cannot beat it. The plot data behind it is not public, so
+it is used deliberately and contained: every NIAPS row carries `weight=0.5` and
+`basis_of_record=NIAPS_S2_EXTRAPOLATED`, and `train-head` reports test accuracy **per
+source**. The MapWAPS-vs-NIAPS gap is the distillation error; the blended figure alone
+is not a meaningful accuracy claim.
 
 Sources name things at different levels of precision — MapWAPS records "Alien Wattle", not *Acacia mearnsii* — so every observation carries its taxonomic rank and the model trains at genus level, where the sources agree. BioSCape VegPlots (Berg + Eerste, the only species-level source) was removed on 2026-08-12: the pre-embargo release carried 83 plots and no cover data. It returns when the full release lands.
 
@@ -104,8 +116,9 @@ embed → train-head → infer
 |---|---|
 | `aoi-sa` | Build the national South Africa boundary. |
 | `aoi-tiles` | Build the tile grid used as the inference unit. |
-| `labels-mapwaps-ingest` | MapWAPS field points across three catchments. |
-| `labels-sanlc-ingest` | SANLC accuracy points + VegMap biomes. |
+| `labels-mapwaps-ingest` | MapWAPS field points across five catchments. |
+| `labels-niaps-ingest` | NIAPS polygons → distilled pure-core points. |
+| `labels-sanlc-ingest` | SANLC accuracy points + VegMap biomes. **Run last.** |
 | `labels` | Inspect the observation store; preview filtered labels. |
 | `ingest-chips` | Extract training chips; resumable, self-reconciling. |
 | `chips-stats` | Explore the chip manifest. |
@@ -114,17 +127,69 @@ embed → train-head → infer
 | `train-head` | Train the classification head; report per-class metrics. |
 | `infer` | Wall-to-wall map → class / confidence / novelty COG. |
 
-### Common workflows
+### Running it, in order
+
+The order is not cosmetic. **`labels-sanlc-ingest` must run last**: it excludes any
+land-cover point within 320 m of a known alien observation, so it has to see every
+other source first.
 
 ```bash
-# A new label source just landed
+# 1 — area of interest, once
+uv run cmrv aoi-sa
+uv run cmrv aoi-tiles
+
+# 2 — raw downloads (NIAPS is manual; see download/README.md)
+python3 download/mapwaps.py            # all five catchments, md5-verified
+python3 download/niaps.py --sha        # verifies what you downloaded by hand
+
+# 3 — labels into the observation store, SANLC LAST
 uv run cmrv labels-mapwaps-ingest
-uv run cmrv ingest-chips        # incremental — only new observations get chipped
+uv run cmrv labels-niaps-ingest
+uv run cmrv labels-sanlc-ingest
+uv run cmrv labels                     # per-source counts + coverage
+
+# 4 — imagery. Long: hours to days. Background it.
+nohup uv run cmrv ingest-chips --max-workers 12 > data/chips_run.log 2>&1 &
 uv run cmrv chips-stats
 
-# Build the split (alien genera + native biomes + transformed cover)
+# 5 — split, embed, train
 uv run cmrv make-split --class-map-name sa_landcover
+uv run cmrv embed
+uv run cmrv train-head --arch linear --weight balanced --save data/runs/head_linear.pt
+
+# 6 — wall-to-wall map for one box (--bbox needs the = sign: the leading
+#     minus on a latitude would otherwise look like a flag)
+uv run cmrv infer --bbox=19.21,-33.20,19.25,-33.16
 ```
+
+Re-running any step is safe. Ingests are idempotent, `ingest-chips` skips work already
+in the manifest, and every verb takes `--help`.
+
+### Flags worth knowing
+
+| Flag | On | Why |
+|---|---|---|
+| `--max-workers 12` | `ingest-chips` | Chipping is network-bound, so workers outnumbering cores is correct. Too many and you get retries, not speed. |
+| `--thin-m 20` | `ingest-chips` | One label per species per 20 m cell, applied **before** any download. Raise it to cut the imagery bill. |
+| `--species Pinus` | `ingest-chips`, `make-split` | Restrict to one taxon. On `ingest-chips` this **disables the stale-chip prune**, so use it for experiments, not the main run. |
+| `--min-class-obs 30` | `make-split` | Drop classes too rare to survive a three-way split. |
+| `--class-map-name` | `make-split` | Which `class_maps` entry assigns `class_id`. Only `sa_landcover` exists. |
+| `--weight balanced` | `train-head` | Inverse-frequency loss. The store is 74 % wattle + eucalyptus, so this matters. |
+| `--arch linear\|mlp` | `train-head` | Linear is the adopted head; it beat MLP. |
+| `--tta-views 4` | `infer` | Soft-average rotated views. ~4× slower, less speckle. |
+| `--replace` / `--no-replace` | `labels-sanlc-ingest` | On by default. Rewrites the partition so a re-run can *drop* points; upsert can only ever add. |
+
+### Watching a chip run
+
+```bash
+free -g                                                   # RAM headroom
+grep -c "attempt .* failed"          data/chips_run.log   # network backing off
+grep -c "downloading assets locally" data/chips_run.log   # expensive fallback
+grep -c "all attempts failed"        data/chips_run.log   # months lost — re-run after
+```
+
+Re-run `ingest-chips` once it finishes. It is incremental, so it fetches only the months
+that failed the first time.
 
 Class definitions — which genera and cover types roll up into which class — live in [configs/labels_schema.yaml](configs/labels_schema.yaml). Each adapter decides what it *ingests* from its own vocabulary dict, and ingest warns by name about anything the class map cannot place.
 
