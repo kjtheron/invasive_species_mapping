@@ -257,3 +257,72 @@ def test_search_cache_is_thread_safe():
         t.join()
     assert len(s2._SEARCH_CACHE) == 50 and len(seen) == 50
     s2._SEARCH_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# Read failures must RAISE, or the retry above them is dead code
+# ---------------------------------------------------------------------------
+
+
+class TestReadFailuresAreNotSwallowed:
+    """The 2026-09-06 regression.
+
+    With ``fail_on_error=False`` odc-loader catches a failed read, logs
+    "Ignoring read failure while reading", and fills the array with nodata.
+    Nodata is 0 and 0 is in BAD_SCL, so every date scored 0.0 clear and the
+    month was dropped as if it were cloudy — while the real cause, an expired
+    SAS token, never reached the retry in ``_month_chip``. About 27 % of chips
+    were lost that way, silently.
+    """
+
+    def _kwargs(self, monkeypatch, fn, gbox):
+        seen = {}
+
+        def fake(items, **kw):
+            seen.update(kw)
+            raise RuntimeError("stop here — only the kwargs matter")
+
+        monkeypatch.setattr(s2, "odc_load", fake)
+        try:
+            fn(gbox)
+        except RuntimeError:
+            pass
+        return seen
+
+    def test_screening_raises_on_a_failed_read(self, monkeypatch):
+        g = s2.point_geobox(230_000.0, 6_240_000.0, 32734, 128, 10)
+        it = SimpleNamespace(datetime=datetime(2023, 6, 1), properties={})
+        kw = self._kwargs(
+            monkeypatch, lambda gb: s2.clear_fraction_per_date([it], gb), g
+        )
+        assert kw["fail_on_error"] is True, (
+            "fail_on_error=False makes an expired token look like 100% cloud"
+        )
+
+    def test_load_raises_on_a_failed_read(self, monkeypatch):
+        g = s2.point_geobox(230_000.0, 6_240_000.0, 32734, 128, 10)
+        kw = self._kwargs(
+            monkeypatch, lambda gb: s2.load_composite(["i"], gb, ["B02"]), g
+        )
+        assert kw["fail_on_error"] is True
+
+
+def test_drop_cell_also_clears_the_sas_token_cache(monkeypatch):
+    """Re-searching alone cannot fix an expired token.
+
+    ``planetary_computer.get_token`` refreshes only when under 60 s remain, and
+    it checks that at SIGN time. A token with minutes left is judged fine, baked
+    into a freshly searched item's href, and dead by the time the read happens.
+    Only clearing TOKEN_CACHE forces a real refresh.
+    """
+    from planetary_computer import sas
+
+    s2._SEARCH_CACHE.clear()
+    with s2._SEARCH_LOCK:
+        s2._SEARCH_CACHE[((0, 0), "a", "b")] = (time.monotonic(), ("item",))
+    sas.TOKEN_CACHE["https://example/token/acct/container"] = "stale"
+
+    s2.drop_cell((0, 0), "a", "b")
+
+    assert ((0, 0), "a", "b") not in s2._SEARCH_CACHE, "cached search survived"
+    assert not sas.TOKEN_CACHE, "stale SAS token survived — the retry will fail again"

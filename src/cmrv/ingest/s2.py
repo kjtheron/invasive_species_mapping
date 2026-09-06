@@ -191,14 +191,29 @@ def search_cell(cell: tuple[int, int], start: str, end: str) -> tuple:
 
 
 def drop_cell(cell: tuple[int, int], start: str, end: str) -> None:
-    """Forget one cached search, so the next call re-searches and re-signs.
+    """Forget one cached search AND the cached SAS token, then let the caller retry.
 
-    Call this when a read fails: the most likely cause is an expired signature,
-    and only a fresh search can fix it. This is what the old code tried to solve
-    by downloading whole tiles to disk.
+    Call this when a read fails: the likeliest cause is an expired signature.
+
+    Re-searching alone is not enough. ``planetary_computer.get_token`` refreshes
+    only when the cached token has under 60 s left, and it checks that at SIGN
+    time. So a token with, say, four minutes remaining is judged fine, gets baked
+    into the hrefs of a freshly searched item, and is dead by the time the read
+    happens. Clearing TOKEN_CACHE forces the next sign to mint a real one.
+
+    Observed in the 2026-09-06 run: a token with se=17:10:38Z was still being
+    used for reads at 17:17Z, six minutes after it expired.
     """
     with _SEARCH_LOCK:
         _SEARCH_CACHE.pop((cell, start, end), None)
+    # Public attribute of planetary_computer.sas, keyed by signing URL. Only one
+    # container is in play, and it refills on the next sign.
+    try:
+        from planetary_computer import sas  # type: ignore
+
+        sas.TOKEN_CACHE.clear()
+    except Exception:  # never let cache housekeeping break a retry
+        logger.debug("could not clear the planetary_computer token cache")
 
 
 def search_bbox(bbox: tuple[float, float, float, float], start: str, end: str) -> list:
@@ -333,7 +348,13 @@ def clear_fraction_per_date(items, gbox: GeoBox, *, pool: int = 8) -> list[tuple
         groupby="solar_day",
         chunks=None,
         pool=pool,
-        fail_on_error=False,
+        # MUST stay True. With fail_on_error=False odc-loader catches a failed
+        # read, logs "Ignoring read failure while reading", and fills the array
+        # with nodata. Nodata is 0, 0 is in BAD_SCL, so every date scores 0.0
+        # clear and the month is dropped as if it were cloudy — while the real
+        # cause (an expired SAS token) never reaches the retry in _month_chip.
+        # Raising is what makes that retry reachable.
+        fail_on_error=True,
     )
     scl = ds["SCL"].values  # (time, y, x) uint8
     if scl.ndim == 2:
@@ -342,10 +363,10 @@ def clear_fraction_per_date(items, gbox: GeoBox, *, pool: int = 8) -> list[tuple
     fracs = clear.reshape(clear.shape[0], -1).mean(axis=1)
 
     # Pair each fraction to its date by the returned `time` coordinate, never by
-    # position. ``fail_on_error=False`` lets odc-stac drop a date whose asset will
-    # not read, and a positional zip would then shift every later pairing by one —
-    # so the chip would be built from a different scene than the one that scored.
-    # That failure is invisible: the chip looks fine and is simply the wrong day.
+    # position. odc-stac may return fewer timesteps than there are input dates,
+    # and a positional zip would then shift every later pairing by one — so the
+    # chip would be built from a different scene than the one that scored. That
+    # failure is invisible: the chip looks fine and is simply the wrong day.
     times = pd.to_datetime(np.atleast_1d(ds["time"].values))
     out: list[tuple[float, list]] = []
     for frac, ts in zip(fracs.tolist(), times, strict=True):
@@ -382,7 +403,7 @@ def load_composite(
         groupby="solar_day",
         chunks=chunks,
         pool=None if chunks is not None else pool,
-        fail_on_error=False,
+        fail_on_error=True,  # see clear_fraction_per_date — silent nodata fill hides expiry
     )
     clear = ~ds["SCL"].isin(list(BAD_SCL))
     arr = ds[list(bands)].where(clear).to_array(dim="band").astype("float32")

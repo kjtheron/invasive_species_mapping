@@ -165,3 +165,110 @@ def test_manifest_row_without_its_chip_file_is_dropped(tmp_path, monkeypatch):
     (tmp_path / "x1" / "2023.tif").unlink()
     _, tried = _run(tmp_path, "winter_rainfall", monkeypatch)
     assert tried, "skipped an obs whose chip file is gone"
+
+
+# --- stopping a run, and picking it up again ---------------------------------
+
+
+def _real_chip(path: Path, months: list[str], n_bands: int = 10, cloud_px: int = 0):
+    """Write a chip the way _write_chip does: uint16, nodata 0, MONTHS tag."""
+    import numpy as np
+    import rasterio
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    a = np.full((len(months) * n_bands, 8, 8), 5000, dtype="uint16")
+    if cloud_px:
+        a[:, 0, :cloud_px] = 0  # masked pixels are 0 — the product's own no-data
+    with rasterio.open(
+        path, "w", driver="GTiff", height=8, width=8, count=a.shape[0],
+        dtype="uint16", nodata=0, crs="EPSG:32734",
+        transform=rasterio.transform.from_origin(230000, 6240000, 10, 10),
+    ) as d:
+        d.write(a)
+        d.update_tags(MONTHS=",".join(months), YEAR=path.stem, SCALE_FACTOR="10000")
+
+
+def test_orphan_chip_on_disk_is_adopted_not_redownloaded(tmp_path, monkeypatch):
+    """A kill between a chip write and the next manifest flush leaves the file
+    with no row. Re-fetching it costs ~29 MB over the wire; reading it costs
+    ~700 KB off disk. It must be read."""
+    _real_chip(tmp_path / "x1" / "2023.tif", ["feb", "may", "sep"])
+    out, tried = _run(tmp_path, "winter_rainfall", monkeypatch)
+    assert not tried, "re-downloaded a chip that was already on disk"
+    assert set(out["obs_id"]) == {"x1"}
+    assert out.iloc[0]["months"] == "feb,may,sep"
+    assert out.iloc[0]["n_months"] == 3
+    assert out.iloc[0]["utm_epsg"] == 32734
+
+
+def test_adopted_chip_gets_its_real_valid_frac(tmp_path, monkeypatch):
+    """valid_frac is recomputed from the pixels, not trusted from a tag, so a
+    chip written by any earlier version can still be adopted."""
+    _real_chip(tmp_path / "x1" / "2023.tif", ["feb", "may", "sep"], cloud_px=4)
+    out, _ = _run(tmp_path, "winter_rainfall", monkeypatch)
+    # 4 of 64 pixels zeroed in every band -> 60/64
+    assert out.iloc[0]["valid_frac"] == 60 / 64
+
+
+def test_orphan_on_the_wrong_calendar_is_not_adopted(tmp_path, monkeypatch):
+    """A regrouped label's old chip must be re-cut, not silently kept."""
+    _real_chip(tmp_path / "x1" / "2023.tif", ["feb", "may", "sep"])
+    _, tried = _run(tmp_path, "summer_rainfall", monkeypatch)
+    assert tried, "adopted a chip cut on the old calendar"
+    assert all(t == {"jul", "sep", "dec"} for t in tried), "re-cut on the wrong calendar"
+
+
+def test_unreadable_orphan_is_re_chipped(tmp_path, monkeypatch):
+    """A truncated file must not be adopted on the strength of its name."""
+    (tmp_path / "x1").mkdir(parents=True)
+    (tmp_path / "x1" / "2023.tif").write_bytes(b"truncated")
+    _, tried = _run(tmp_path, "winter_rainfall", monkeypatch)
+    assert tried, "adopted an unreadable chip"
+
+
+def test_interrupt_cancels_queued_work_and_banks_finished_rows(tmp_path, monkeypatch):
+    """One Ctrl+C must stop the run AND keep what already finished.
+
+    `with ThreadPoolExecutor(...)` calls shutdown(wait=True) on exit, which
+    drains every queued future — all 93k of them on a full run — so a single
+    Ctrl+C looked like a hang and kept chipping. A KeyboardInterrupt raised in a
+    worker is a BaseException, so it passes through `run`'s `except Exception`
+    and re-raises in the main thread, which is the path this exercises.
+    """
+    import pandas as pd
+
+    from cmrv.ingest import chips as C
+
+    import threading
+    import time as _t
+
+    n = {"i": 0}
+    lk = threading.Lock()
+
+    def flaky(row, months_cfg, bands, out_prefix, opt):
+        with lk:
+            n["i"] += 1
+            i = n["i"]
+        if i == 3:
+            raise KeyboardInterrupt
+        _t.sleep(0.05)  # slow enough that queued work is still queued at interrupt
+        return {
+            "obs_id": row.obs_id, "species": "pinus", "year": 2023, "block_id": 0,
+            "lon": 18.5, "lat": -33.9, "chip_uri": f"{out_prefix}/{row.obs_id}/2023.tif",
+            "months": "feb,may,sep", "n_months": 3, "valid_frac": 1.0, "utm_epsg": 32734,
+        }
+
+    monkeypatch.setattr(C, "_process_obs", flaky)
+    labels = _labels([f"x{i}" for i in range(40)])
+    try:
+        C.extract_training_chips(
+            labels=labels, months_by_zone=BY_ZONE, bands=["B02"],
+            out_prefix=str(tmp_path), max_workers=1,
+        )
+        raise AssertionError("KeyboardInterrupt did not propagate — Ctrl+C would not stop the run")
+    except KeyboardInterrupt:
+        pass
+
+    assert n["i"] < 40, f"kept working after the interrupt ({n['i']} of 40 started)"
+    banked = pd.read_parquet(tmp_path / "manifest.parquet")
+    assert len(banked) >= 2, "rows finished before the interrupt were not saved"
