@@ -191,7 +191,8 @@ def ingest_chips(
     date_max: str = "2025-12-31",
     default_year: int = 2023,
     species: list[str] | None = None,
-    max_workers: int = 6,
+    max_workers: int = 8,
+    max_dates: int | None = None,
 ) -> None:
     """Extract temporally-aligned training chips for label points (Stage 2b).
 
@@ -202,10 +203,18 @@ def ingest_chips(
     Manifest-based incremental extraction — existing chips are skipped, so it's
     safe to re-run after adding a label source.
 
+    One work unit is one observation. Per month window it searches the label's
+    coarse cell (memoised), drops the dates whose footprints miss the chip, reads
+    SCL alone to find the date clearest over *this* chip, then reads the bands for
+    that date only. One uint16 GeoTIFF per (obs, year) holds every month as bands.
+
     --aoi: defaults to ``aoi.train_path`` (national SA — so KZN/EC labels aren't clipped).
-    --block-km: spatial-block size in km (default 10; STAC-query batching + CV unit).
+    --block-km: spatial-block size in km (default 10; the CV unit, not a query batch).
     --thin-m: keep one label per species per thin-m cell, before download (default 20).
     --species: restrict to these species (by name fragment). Omit for all.
+    --max-workers: chips in flight. Each also opens ``read_pool`` asset reads.
+    --max-dates: override ``max_dates_per_month`` — raise it if too many chips
+                 drop on cloud, then re-chip everything rather than mixing.
     """
     cfg = load_config(pipeline)
     aoi = aoi or cfg["aoi"]["train_path"]
@@ -257,8 +266,12 @@ def ingest_chips(
         months_by_zone=cfg["months_by_zone"],
         bands=cfg["s2_bands"],
         out_prefix=out_prefix,
-        cloud_cover_max=cfg.get("cloud_cover_max", 40),
-        max_scenes=cfg.get("max_scenes_per_composite"),
+        chip_px=cfg.get("chip_px", 128),
+        max_dates=max_dates if max_dates is not None else cfg.get("max_dates_per_month", 1),
+        min_coverage=cfg.get("min_coverage", 0.98),
+        min_valid_frac=cfg.get("min_valid_frac", 0.85),
+        screen_max_dates=cfg.get("screen_max_dates", 24),
+        read_pool=cfg.get("read_pool", 8),
         # A --species run only knows about its own subset, so it must not prune
         # everything else's chips as "no longer in the thinned set".
         reconcile=species is None,
@@ -398,29 +411,33 @@ def chips_stats(
 def embed(
     manifest: str = "data/chips/train/manifest.parquet",
     out: str = "data/embeddings/universat_center.zarr",
-    output_grid: int = 64,
+    output_grid: int | None = None,
+    pipeline: str = "configs/pipeline.yaml",
     device: str = "cpu",
-    batch: int = 8,
+    batch: int = 2,
     num_workers: int = 4,
     amp: bool = False,
 ) -> None:
     """Embed training chips → UniverSat center-token vectors (single Zarr).
 
-    One 768-d vector per obs at the chip's native 10 m resolution (``output_grid 64``
-    = per-pixel tokens over the 64 px chip, matching wall-to-wall inference). Center
-    pooling = the per-location representation the frozen head replicates densely at
-    inference. CRS-less + tiny (~7.5 MB), so it's a single Zarr regardless of source
-    UTM zone. Needs the ``embed`` dependency group.
+    One 768-d vector per obs. --output-grid defaults to ``chip_px`` from
+    pipeline.yaml, which is the only value that keeps one token per 10 m pixel and
+    so matches wall-to-wall inference. Do not set it lower to save time: it halves
+    the map resolution instead. Center pooling = the per-location representation
+    the frozen head replicates densely at inference. CRS-less + tiny, so it is a
+    single Zarr regardless of source UTM zone. Needs the ``embed`` group.
 
     --device: ``cpu`` or ``cuda`` (cloud). --num-workers: chip-prefetch workers that
     overlap disk reads with the forward (raise on GPU to keep it fed). --amp: fp16/bf16
-    autocast (big GPU win; leave off on CPU). ponytail: --batch default 8 — at
-    output_grid 64 the ViT's O(L²) attention over 4096 tokens makes activations scale
-    hard with batch (32 OOMs a 16 GB box); raise it on a bigger-VRAM GPU.
+    autocast (big GPU win; leave off on CPU). --batch default 2: the ViT's O(L^2)
+    attention over ``output_grid^2`` tokens dominates activations, and at 128 that is
+    16384 tokens — 16x the 64 px cost. Raise it on a bigger-VRAM GPU.
     """
     from cmrv.embeddings.embed import embed_chips
     from cmrv.embeddings.universat import UniverSatEmbedder
 
+    if output_grid is None:
+        output_grid = load_config(pipeline).get("chip_px", 128)
     enc = UniverSatEmbedder(
         pool="center", output_grid=output_grid, device=device, batch=batch, amp=amp
     )

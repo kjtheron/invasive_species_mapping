@@ -41,7 +41,7 @@ def chip_stats(
     logger.info("reading {}", manifest_uri)
     m = read_parquet_df(manifest_uri)
 
-    n_chips = len(m)
+    n_chips = len(m)  # one row per (obs_id, year) since chips became one file
     n_obs = m["obs_id"].nunique()
     n_species = m["species"].nunique()
     n_blocks = m["block_id"].nunique() if "block_id" in m.columns else 0
@@ -82,17 +82,14 @@ def chip_stats(
     print(f"  species with <50 obs: {long_tail:>6,} (will be data-poor for training)")
 
     # --- temporal: month coverage per obs_id ---
-    if "month_label" in m.columns:
-        months_per_obs = m.groupby("obs_id")["month_label"].nunique()
-        month_dist = months_per_obs.value_counts().sort_index()
-        _print_section("Month-completeness (chips per obs_id)")
-        for n_months, count in month_dist.items():
+    if "n_months" in m.columns:
+        _print_section("Month-completeness (months per chip)")
+        for n_months, count in m["n_months"].value_counts().sort_index().items():
             print(f"  {n_months} month(s):  {_fmt_int(int(count))} obs_ids")
-        complete = int((months_per_obs == months_per_obs.max()).sum())
-        print(
-            f"  fully covered ({months_per_obs.max()} months): "
-            f"{complete:,} obs_ids ({100 * complete / n_obs:.1f}%)"
-        )
+    if "months" in m.columns:
+        _print_section("Month calendars in use")
+        for cal, count in m["months"].value_counts().items():
+            print(f"  {cal}:  {_fmt_int(int(count))} obs_ids")
 
     # --- spatial: per-block top species (concentration check) ---
     if "block_id" in m.columns:

@@ -18,18 +18,19 @@ def _write_manifest(tmp_path: Path) -> str:
             *(["hakea sericea"] * 1),
         ]
     ):
-        for month in ("jan", "apr", "aug", "oct"):
-            rows.append(
-                {
-                    "obs_id": obs_id,
-                    "species": sp,
-                    "month_label": month,
-                    "block_id": obs_id % 2,
-                    "lon": 25.0 + obs_id * 0.001,
-                    "lat": -30.0 - obs_id * 0.001,
-                    "year": 2023,
-                }
-            )
+        rows.append(
+            {
+                "obs_id": obs_id,
+                "species": sp,
+                "months": "feb,may,sep",
+                "n_months": 3,
+                "block_id": obs_id % 2,
+                "lon": 25.0 + obs_id * 0.001,
+                "lat": -30.0 - obs_id * 0.001,
+                "year": 2023,
+                "valid_frac": 1.0,
+            }
+        )
     df = pd.DataFrame(rows)
     uri = str(tmp_path / "manifest.parquet")
     df.to_parquet(uri, index=False)
@@ -44,4 +45,5 @@ def test_chip_stats_runs(tmp_path: Path, capsys):
     assert "acacia mearnsii" in out
     assert "Top 5 species" in out
     assert "Month-completeness" in out
-    assert "4 month(s)" in out  # all obs are fully covered
+    assert "3 month(s)" in out  # all obs are fully covered
+    assert "feb,may,sep" in out  # the calendar in use is named, not just counted

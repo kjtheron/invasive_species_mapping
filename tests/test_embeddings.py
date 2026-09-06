@@ -32,33 +32,42 @@ def test_embed_chips_writes_keyed_zarr(tmp_path):
 
     from cmrv.embeddings.embed import embed_chips
 
+    # One uint16 file per obs, months as bands, month-major: feb_B02..feb_B12,
+    # may_B02.., sep_B12. The loader reshapes (T*C, H, W) -> (T, C, H, W) using
+    # the manifest's `months`, so band ORDER in the file is load-bearing.
     months = ("feb", "may", "sep")
     rows = []
     for oid in ("a", "b"):
-        for mo in months:
-            p = tmp_path / oid / f"{mo}.tif"
-            p.parent.mkdir(exist_ok=True)
-            with rasterio.open(
-                p, "w", driver="GTiff", height=4, width=4, count=10, dtype="float32"
-            ) as d:
-                d.write(np.full((10, 4, 4), 5000.0, dtype="float32"))
-            rows.append(
-                {
-                    "obs_id": oid,
-                    "month_label": mo,
-                    "chip_uri": str(p),
-                    "block_id": 7,
-                    "lon": 25.0,
-                    "lat": -30.0,
-                    "valid_frac": 1.0,
-                }
-            )
+        p = tmp_path / oid / "2023.tif"
+        p.parent.mkdir(exist_ok=True)
+        with rasterio.open(
+            p, "w", driver="GTiff", height=4, width=4, count=30, dtype="uint16", nodata=0
+        ) as d:
+            d.write(np.full((30, 4, 4), 5000, dtype="uint16"))
+        rows.append(
+            {
+                "obs_id": oid,
+                "species": "pinus",
+                "year": 2023,
+                "chip_uri": str(p),
+                "months": ",".join(months),
+                "n_months": 3,
+                "block_id": 7,
+                "lon": 25.0,
+                "lat": -30.0,
+                "valid_frac": 1.0,
+            }
+        )
     pd.DataFrame(rows).to_parquet(tmp_path / "manifest.parquet")
 
     class _Stub:
         """Duck-typed stand-in for UniverSatEmbedder — embed_chips only calls .embed()."""
 
         def embed(self, stacks, dates):
+            # The stack must arrive as (B, T, C, H, W) with T from `months`, not
+            # as the raw (T*C, H, W) the file holds.
+            assert stacks.shape[1:] == (3, 10, 4, 4), stacks.shape
+            assert dates.shape[1] == 3, dates.shape
             return np.zeros((len(stacks), 768), dtype="float32")
 
     out = embed_chips(

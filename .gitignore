@@ -14,6 +14,7 @@ data/**
 !data/**/
 !data/**/README.md
 logs/
+src/inspo/
 
 # Data sourcing temp
 dataset_lookup.csv

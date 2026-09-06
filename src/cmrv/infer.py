@@ -14,6 +14,7 @@ projection — mosaic to a common CRS downstream.
 
 from __future__ import annotations
 
+import geopandas as gpd  # type: ignore
 import numpy as np
 from loguru import logger  # type: ignore
 from rasterio.crs import CRS as RioCRS  # type: ignore
@@ -25,35 +26,59 @@ from cmrv.aoi import SA_ALBERS, months_for_geom, utm_epsg
 from cmrv.embeddings.constants import MONTH_DOY
 from cmrv.embeddings.head import load_head, predict_probs
 from cmrv.embeddings.universat import UniverSatEmbedder
-from cmrv.ingest.chips import _query_items, _stac_client, _stack_items
-from cmrv.ingest.composite import _transform_from_da, monthly_median
+from cmrv.ingest import s2
+from cmrv.ingest.chips import CHIP_PX, WINDOW_PADDING_DAYS, temporal_windows
 from cmrv.io import load_config, write_cog
 
-CHIP_PX = 64
 RESOLUTION_M = 10
 NODATA = 255
+# Dask block size for a wall-to-wall box. Unlike a chip (one block, loaded
+# eagerly), a box is far too large to hold, so these loads stay lazy.
+CHUNK = 1024
+# Acquisition dates medianed per month over a box. A chip takes one date, because
+# the SCL screen can find a date that is clear over 1.3 km. No single date is
+# clear over a whole inference box, so here the median does real work.
+INFER_MAX_DATES = 6
 
 
-def _composite_box(geom_wgs84, year, months_cfg, bands, cloud_cover_max, max_scenes=None):
-    """3-month median composite → ``(T, C, H, W)``, transform, epsg (from the S2 data)."""
-    client = _stac_client()
-    epsg, arrs, transform = None, [], None
-    for m in months_cfg:
-        start, end = f"{year}-{m['start'][5:]}", f"{year}-{m['end'][5:]}"
-        items = _query_items(
-            client, geom_wgs84, start, end, cloud_cover_max=cloud_cover_max, max_scenes=max_scenes
-        )
+def _composite_box(geom_wgs84, year, months_cfg, bands, max_dates=INFER_MAX_DATES):
+    """3-month median composite -> ``(T, C, H, W)``, transform, epsg (from the S2 data).
+
+    Same screening as a training chip, at box scale: search, screen footprints per
+    date, then rank the dates by the clear fraction **over this box** measured on
+    SCL alone at 1/8 resolution. Ranking on ``eo:cloud_cover`` instead would rank
+    on cloud over a 110 km MGRS tile, which is not the same question.
+    """
+    # The grid is fixed before any network call, from the box centroid's UTM zone
+    # — the same rule the training chips use, so a chip and a map pixel land on
+    # the same 10 m grid. Deriving it from the first item's `proj:epsg` instead
+    # would make the output grid depend on which scene the search happened to
+    # return first.
+    cx, cy = geom_wgs84.centroid.coords[0]
+    epsg = utm_epsg(cx, cy)
+    box_utm = gpd.GeoSeries([geom_wgs84], crs=4326).to_crs(epsg).iloc[0]
+    gbox = s2.bbox_geobox(box_utm.bounds, epsg, RESOLUTION_M)
+    scan_gbox = gbox.zoom_out(8)  # ranking months needs 80 m pixels, not 10 m
+
+    arrs = []
+    for win in temporal_windows(year, months_cfg, WINDOW_PADDING_DAYS):
+        items = s2.search_bbox(geom_wgs84.bounds, win["start"], win["end"])
         if not items:
-            raise ValueError(f"no S2 scenes for {start}/{end} — try another year/box")
-        if epsg is None:  # native Sentinel-2 CRS, not hardcoded
-            cx, cy = geom_wgs84.centroid.coords[0]
-            epsg = int(items[0].properties.get("proj:epsg") or utm_epsg(cx, cy))
-        med = monthly_median(
-            _stack_items(items, geom_wgs84, bands, resolution_m=RESOLUTION_M, epsg=epsg)
-        ).compute()  # (band, y, x)
+            raise ValueError(f"no S2 scenes for {win['start']}/{win['end']} — try another year/box")
+        # No footprint screen here. A chip demands one date that covers it whole;
+        # a box is legitimately mosaicked from many partial frames, so per-date
+        # full coverage is the wrong question at this scale.
+        scored = s2.clear_fraction_per_date(items, scan_gbox)
+        scored.sort(key=lambda p: -p[0])
+        keep = [i for _f, grp in scored[:max_dates] for i in grp] or items
+        logger.info(
+            "  {} {}: {} dates -> keeping best {} (clearest {:.0%})",
+            win["label"], year, len(scored), min(max_dates, len(scored)),
+            scored[0][0] if scored else 0.0,
+        )
+        med = s2.load_composite(keep, gbox, bands, chunks={"x": CHUNK, "y": CHUNK}).compute()
         arrs.append(med.values.astype("float32"))
-        transform = transform or _transform_from_da(med)
-    return np.stack(arrs), transform, epsg
+    return np.stack(arrs), gbox.transform, epsg
 
 
 def _starts(n: int, win: int, stride: int) -> list[int]:
@@ -151,18 +176,13 @@ def infer_box(
     bands = cfg["s2_bands"]
     _zone, months = months_for_geom(geom, cfg)
     stack, transform, epsg = _composite_box(
-        geom,
-        year,
-        months,
-        bands,
-        cfg.get("cloud_cover_max", 95),
-        cfg.get("max_scenes_per_composite"),
+        geom, year, months, bands, cfg.get("infer_max_dates", INFER_MAX_DATES)
     )
     t, c, h, w = stack.shape
     logger.info("box composite: {} months x {} bands x {}x{} px @ EPSG:{}", t, c, h, w, epsg)
 
     model, mu, sd, classes, ood = load_head(ckpt_path)
-    enc = UniverSatEmbedder(pool="center", output_grid=CHIP_PX, device=device, batch=4)
+    enc = UniverSatEmbedder(pool="center", output_grid=CHIP_PX, device=device, batch=1)
     dvec = np.array([[MONTH_DOY[m["label"]] for m in months]])
     k = len(classes)
 

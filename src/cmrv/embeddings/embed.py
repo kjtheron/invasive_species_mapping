@@ -27,13 +27,18 @@ from cmrv.embeddings.constants import MONTH_DOY
 from cmrv.embeddings.universat import UniverSatEmbedder
 
 
-def _load_stack(uris: list[str], scale: float) -> np.ndarray:
-    """Read a ``(T, C, H, W)`` chip stack — DN→reflectance, cloud-NaN filled with 0."""
-    frames = []
-    for uri in uris:
-        with rasterio.open(uri) as src:
-            frames.append(np.nan_to_num(src.read().astype("float32") * scale, nan=0.0))
-    return np.stack(frames)
+def _load_stack(uri: str, n_months: int, scale: float) -> np.ndarray:
+    """Read one chip file as ``(T, C, H, W)`` — DN to reflectance, no-data to 0.
+
+    ``ingest-chips`` writes a single uint16 GeoTIFF per (obs, year) whose bands run
+    month-major (``feb_B02 ... feb_B12, may_B02 ...``), with 0 as the L2A product's
+    own no-data. A masked cloud pixel is therefore already 0, which is exactly the
+    fill UniverSat needs — it NaN-poisons on anything else.
+    """
+    with rasterio.open(uri) as src:
+        arr = src.read().astype("float32") * scale  # (T*C, H, W)
+    t, c = n_months, arr.shape[0] // n_months
+    return arr.reshape(t, c, arr.shape[1], arr.shape[2])
 
 
 class _ChipDataset(Dataset):
@@ -47,7 +52,8 @@ class _ChipDataset(Dataset):
         return len(self.recs)
 
     def __getitem__(self, i: int) -> np.ndarray:
-        return _load_stack(self.recs[i][-1], self.scale)
+        _oid, _bid, _lon, _lat, dvec, uri = self.recs[i]
+        return _load_stack(uri, len(dvec), self.scale)
 
 
 def embed_chips(
@@ -70,25 +76,23 @@ def embed_chips(
     """
     man = pd.read_parquet(manifest_uri)
     if min_valid_frac > 0 and "valid_frac" in man.columns:
-        man = man[man.groupby("obs_id")["valid_frac"].transform("min") >= min_valid_frac]
+        man = man[man["valid_frac"] >= min_valid_frac]
 
-    recs = []  # (obs_id, block_id, lon, lat, dvec, [chip_uri date-ordered])
-    for obs_id, g in man.groupby("obs_id"):
-        by_month = dict(zip(g["month_label"], g["chip_uri"], strict=False))
-        # Date-order this obs's own months so the stack + its day-of-year vector align.
-        # ponytail: every zone configures min_months months → uniform T for batching.
-        present = sorted(by_month, key=lambda mo: MONTH_DOY[mo])[:min_months]
-        if len(present) < min_months:
+    recs = []  # (obs_id, block_id, lon, lat, dvec, chip_uri)
+    for r in man.drop_duplicates("obs_id").itertuples():
+        # `months` is written in the same order as the file's band groups, so the
+        # day-of-year vector lines up with the stack without re-sorting anything.
+        months = str(r.months).split(",")
+        if len(months) < min_months:
             continue
-        r = g.iloc[0]
         recs.append(
             (
-                obs_id,
-                int(r["block_id"]),
-                float(r["lon"]),
-                float(r["lat"]),
-                [MONTH_DOY[mo] for mo in present],
-                [by_month[mo] for mo in present],
+                r.obs_id,
+                int(r.block_id),
+                float(r.lon),
+                float(r.lat),
+                [MONTH_DOY[mo] for mo in months],
+                r.chip_uri,
             )
         )
     if not recs:

@@ -1,184 +1,175 @@
-"""Tests for Stage 2 STAC ingest + compositing (cloud_mask + composite)."""
+"""Chip extraction: month selection, the drop reasons, and the split.
+
+The S2 access layer has its own file (test_s2.py); this covers the layer above it
+— what a chip run does with what that layer returns.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 
-from cmrv.ingest.chips import _reconcile_manifest, _window_medians
-from cmrv.ingest.cloud_mask import BAD_SCL, apply_scl_mask
-from cmrv.ingest.composite import monthly_median
+from cmrv.ingest import chips
+from cmrv.ingest.chips import _month_chip, _reconcile_manifest, temporal_windows
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_da_with_scl(scl_values: np.ndarray) -> xr.DataArray:
-    """Build (time=1, band=[B02, SCL], y=H, x=W) DataArray from a 2-D SCL array."""
-    H, W = scl_values.shape
-    b02 = np.ones((1, 1, H, W), dtype="float32")
-    scl = scl_values[np.newaxis, np.newaxis, :, :].astype("float32")
-    data = np.concatenate([b02, scl], axis=1)
-    return xr.DataArray(
-        data,
-        dims=["time", "band", "y", "x"],
-        coords={"band": ["B02", "SCL"]},
-    )
+WIN = {"start": "2023-01-17", "end": "2023-03-15", "label": "feb"}
+OPT = dict(
+    max_dates=1,
+    min_coverage=0.98,
+    min_valid_frac=0.85,
+    screen_max_dates=24,
+    read_pool=1,
+)
 
 
-# ---------------------------------------------------------------------------
-# apply_scl_mask
-# ---------------------------------------------------------------------------
+class _FakeGbox:
+    """Enough geobox for _month_chip: it only needs an extent in WGS84."""
+
+    class _Ext:
+        def to_crs(self, _crs):
+            from shapely.geometry import box
+
+            return type("_G", (), {"geom": box(19.0, -33.1, 19.02, -33.08)})()
+
+    extent = _Ext()
 
 
-class TestApplySclMask:
-    def test_bad_scl_pixels_become_nan(self) -> None:
-        scl = np.array([[3, 4], [8, 5]], dtype="float32")  # 3,8 bad; 4,5 clear
-        da = _make_da_with_scl(scl)
-        result = apply_scl_mask(da)
-        assert np.isnan(result.values[0, 0, 0, 0]), "SCL=3 (cloud shadow) not masked"
-        assert np.isnan(result.values[0, 0, 1, 0]), "SCL=8 (cloud med) not masked"
-        assert not np.isnan(result.values[0, 0, 0, 1]), "SCL=4 (vegetation) masked by mistake"
-        assert not np.isnan(result.values[0, 0, 1, 1]), "SCL=5 (bare) masked by mistake"
+class _FakeItem:
+    """A STAC item as far as the screening path is concerned."""
 
-    def test_scl_band_excluded_from_output(self) -> None:
-        scl = np.array([[4, 5]], dtype="float32")
-        da = _make_da_with_scl(scl)
-        result = apply_scl_mask(da)
-        assert "SCL" not in result.band.values.tolist()
+    def __init__(self, name, cloud=10.0):
+        self.name = name
+        self.properties = {"eo:cloud_cover": cloud}
 
-    def test_all_bad_scl_returns_all_nan(self) -> None:
-        scl = np.array([[3, 8], [9, 10]], dtype="float32")
-        da = _make_da_with_scl(scl)
-        result = apply_scl_mask(da)
-        assert np.isnan(result.values).all()
-
-    def test_all_clear_scl_values_unchanged(self) -> None:
-        scl = np.array([[4, 5], [6, 7]], dtype="float32")
-        da = _make_da_with_scl(scl)
-        result = apply_scl_mask(da)
-        np.testing.assert_array_equal(result.values, np.ones((1, 1, 2, 2), dtype="float32"))
-
-    def test_all_bad_scl_codes_are_masked(self) -> None:
-        """Every value in BAD_SCL should produce NaN in the output."""
-        for bad_val in BAD_SCL:
-            scl = np.array([[bad_val]], dtype="float32")
-            da = _make_da_with_scl(scl)
-            result = apply_scl_mask(da)
-            assert np.isnan(result.values).all(), f"SCL={bad_val} not masked"
-
-    def test_multiple_sr_bands_all_masked(self) -> None:
-        """When SCL is bad, all SR bands at that pixel become NaN."""
-        H, W = 2, 2
-        scl_vals = np.array([[3, 4], [4, 4]], dtype="float32")
-        b02 = np.ones((1, 1, H, W), dtype="float32") * 0.1
-        b03 = np.ones((1, 1, H, W), dtype="float32") * 0.2
-        scl = scl_vals[np.newaxis, np.newaxis]
-        data = np.concatenate([b02, b03, scl], axis=1)
-        da = xr.DataArray(
-            data,
-            dims=["time", "band", "y", "x"],
-            coords={"band": ["B02", "B03", "SCL"]},
-        )
-        result = apply_scl_mask(da)
-        # pixel (0,0) has SCL=3 → both bands NaN
-        assert np.isnan(result.values[0, 0, 0, 0])
-        assert np.isnan(result.values[0, 1, 0, 0])
-        # pixel (0,1) has SCL=4 → both bands valid
-        assert not np.isnan(result.values[0, 0, 0, 1])
-        assert not np.isnan(result.values[0, 1, 0, 1])
+    def __repr__(self):
+        return self.name
 
 
-# ---------------------------------------------------------------------------
-# monthly_median
-# ---------------------------------------------------------------------------
+def _stub(monkeypatch, *, items=("i",), scored=None, arr=None, raises=None):
+    """Wire the S2 layer to fixed answers so the decision logic is what is tested.
 
-
-class TestMonthlyMedian:
-    def test_reduces_time_dim(self) -> None:
-        arr = np.ones((3, 2, 4, 4), dtype="float32")  # (T=3, B=2, H=4, W=4)
-        da = xr.DataArray(arr, dims=["time", "band", "y", "x"])
-        result = monthly_median(da)
-        assert result.dims == ("band", "y", "x")
-        assert result.shape == (2, 4, 4)
-
-    def test_correct_median_value(self) -> None:
-        # (T=3, B=1, H=1, W=1) with time values [1, 3, 5] → median = 3
-        data = np.array([1.0, 3.0, 5.0], dtype="float32").reshape(3, 1, 1, 1)
-        da = xr.DataArray(data, dims=["time", "band", "y", "x"])
-        result = monthly_median(da)
-        assert float(result.values[0, 0, 0]) == pytest.approx(3.0)
-
-    def test_skipna_uses_remaining_valid_pixels(self) -> None:
-        """NaN at one time step → median over remaining valid observations."""
-        # (T=2, B=1, H=1, W=2): time 0 has NaN at x=1; time 1 is fully valid
-        data = np.array([[[[1.0, np.nan]]], [[[3.0, 5.0]]]], dtype="float32")
-        da = xr.DataArray(data, dims=["time", "band", "y", "x"])
-        result = monthly_median(da)
-        # x=0: median of [1.0, 3.0] = 2.0
-        assert float(result.values[0, 0, 0]) == pytest.approx(2.0)
-        # x=1: median of [5.0] (NaN skipped) = 5.0
-        assert float(result.values[0, 0, 1]) == pytest.approx(5.0)
-
-    def test_all_nan_slice_stays_nan(self) -> None:
-        arr = np.full((2, 1, 1, 1), np.nan, dtype="float32")
-        da = xr.DataArray(arr, dims=["time", "band", "y", "x"])
-        result = monthly_median(da)
-        assert np.isnan(result.values).all()
-
-
-# ---------------------------------------------------------------------------
-# _window_medians  (per-label window compute — only kept pixels materialised)
-# ---------------------------------------------------------------------------
-
-
-def _make_stack(T: int = 2, B: int = 2, H: int = 8, W: int = 8, fill: float = 1.0) -> xr.DataArray:
-    """Synthetic (time, band, y, x) stack with UTM-like x/y coords."""
-    arr = np.full((T, B, H, W), fill, dtype="float32")
-    y = np.linspace(6_240_000.0, 6_240_000.0 - (H - 1) * 10.0, H)
-    x = np.linspace(230_000.0, 230_000.0 + (W - 1) * 10.0, W)
-    return xr.DataArray(arr, dims=["time", "band", "y", "x"], coords={"y": y, "x": x})
-
-
-class TestWindowMedians:
-    def test_in_bounds_window_median(self) -> None:
-        stack = _make_stack(fill=2.0)
-        cx, cy = float(stack.x.values[4]), float(stack.y.values[4])
-        (result,) = _window_medians(stack, [(cx, cy)], chip_px=4)
-        arr, _tf, valid_frac = result
-        assert arr.shape == (2, 4, 4)
-        assert valid_frac == pytest.approx(1.0)
-        assert np.allclose(arr, 2.0)
-
-    def test_out_of_bounds_rejected(self) -> None:
-        stack = _make_stack()
-        cx, cy = float(stack.x.values[0]), float(stack.y.values[0])  # corner → window off-edge
-        assert _window_medians(stack, [(cx, cy)], chip_px=4)[0] == "oob"
-
-    def test_low_valid_frac_rejected(self) -> None:
-        stack = _make_stack(fill=np.nan)  # all-NaN window → valid_frac 0
-        cx, cy = float(stack.x.values[4]), float(stack.y.values[4])
-        assert _window_medians(stack, [(cx, cy)], chip_px=4)[0].startswith("low_valid_frac")
-
-
-def test_empty_stack_skips_cell_instead_of_raising(monkeypatch) -> None:
-    """A sub-cell no scene covers is reported, not raised as a float-cast ValueError.
-
-    stackstac drops every asset whose footprint misses the bounds; the leftover
-    band index is empty *float64*, so ``.sel(band="SCL")`` used to blow up with
-    "could not convert string to float".
+    Returns a dict the test can read back: ``read["best"]`` is the item list that
+    reached ``load_composite``, ``read["screened"]`` how many reached the screen.
     """
-    from cmrv.ingest import chips
+    objs = [i if hasattr(i, "properties") else _FakeItem(str(i)) for i in items]
+    read: dict = {}
+    monkeypatch.setattr(chips.s2, "search_cell", lambda *a: tuple(objs))
+    monkeypatch.setattr(chips.s2, "covering_items", lambda it, g, c: list(it))
+    monkeypatch.setattr(chips.s2, "by_solar_day", lambda it: [[i] for i in it])
 
-    empty = _make_stack(T=0, B=0)
-    monkeypatch.setattr(chips, "_stack_items", lambda *a, **k: empty)
-    results = chips._batched_window_medians(
-        [], [(230_040.0, 6_239_960.0)], ["B02"], chip_px=4, resolution_m=10, epsg=32734
-    )
-    assert results == ["no_scene_overlap"]
+    def screen(cov, gbox, **k):
+        read["screened"] = len(cov)
+        return list(scored or [])
+
+    def load(best, gbox, bands, **k):
+        read["best"] = best
+        if raises:
+            raise raises
+        return type("_A", (), {"values": arr})()
+
+    monkeypatch.setattr(chips.s2, "clear_fraction_per_date", screen)
+    monkeypatch.setattr(chips.s2, "load_composite", load)
+    return read
+
+
+# ---------------------------------------------------------------------------
+# temporal_windows
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalWindows:
+    def test_padding_widens_both_ends(self):
+        """Padding is what gives the SCL screen more than one date to choose from."""
+        (w,) = temporal_windows(
+            2023, [{"start": "0000-02-01", "end": "0000-02-28", "label": "feb"}], padding_days=15
+        )
+        assert w["start"] == "2023-01-17" and w["end"] == "2023-03-15"
+
+    def test_year_comes_from_the_label_not_the_template(self):
+        (w,) = temporal_windows(
+            2019, [{"start": "0000-07-01", "end": "0000-07-31", "label": "jul"}], padding_days=0
+        )
+        assert w["start"].startswith("2019") and w["label"] == "jul"
+
+
+# ---------------------------------------------------------------------------
+# _month_chip — every branch names WHY a chip was lost
+# ---------------------------------------------------------------------------
+
+
+class TestMonthChip:
+    def test_clearest_date_wins(self, monkeypatch):
+        """The whole point of the screen: pick by clear fraction over THIS chip,
+        not by the scene-level cloud property over a 110 km tile.
+
+        The cloud property here says "a" is the cleanest scene; SCL over the chip
+        says "b" is. The chip must be built from "b".
+        """
+        arr = np.ones((2, 8, 8), dtype="float32")
+        read = _stub(
+            monkeypatch,
+            items=(_FakeItem("a", cloud=1.0), _FakeItem("b", cloud=60.0), _FakeItem("c", 30.0)),
+            scored=[(0.20, ["a"]), (0.99, ["b"]), (0.60, ["c"])],
+            arr=arr,
+        )
+        res = _month_chip(19.01, -33.09, _FakeGbox(), WIN, ["B02", "B03"], **OPT)
+        assert not isinstance(res, str), res
+        assert res[1] == pytest.approx(1.0)
+        assert read["best"] == ["b"], "did not read the clearest date"
+
+    def test_no_items_is_reported_not_raised(self, monkeypatch):
+        _stub(monkeypatch, items=())
+        assert _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02"], **OPT) == "no_items"
+
+    def test_no_covering_date_is_reported(self, monkeypatch):
+        _stub(monkeypatch, items=("a",))
+        monkeypatch.setattr(chips.s2, "covering_items", lambda *a: [])
+        assert _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02"], **OPT) == "no_coverage"
+
+    def test_too_cloudy_is_rejected_before_reading_bands(self, monkeypatch):
+        """The saving: a month that cannot pass must cost SCL only, never 10 bands."""
+        loaded = []
+        _stub(monkeypatch, items=("a",), scored=[(0.10, ["a"])])
+        monkeypatch.setattr(chips.s2, "load_composite", lambda *a, **k: loaded.append(1))
+        res = _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02"], **OPT)
+        assert res.startswith("screen_clear=")
+        assert loaded == [], "read the bands for a month the screen already rejected"
+
+    def test_cloudy_centre_is_rejected(self, monkeypatch):
+        arr = np.ones((2, 8, 8), dtype="float32")
+        arr[0, 4, 4] = np.nan
+        _stub(monkeypatch, items=("a",), scored=[(0.99, ["a"])], arr=arr)
+        assert _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02", "B03"], **OPT) == "center_cloudy"
+
+    def test_low_valid_fraction_is_rejected(self, monkeypatch):
+        arr = np.full((2, 8, 8), np.nan, dtype="float32")
+        arr[:, 4, 4] = 1.0  # centre fine, everything else cloud
+        _stub(monkeypatch, items=("a",), scored=[(0.99, ["a"])], arr=arr)
+        res = _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02", "B03"], **OPT)
+        assert res.startswith("low_valid=")
+
+    def test_read_failure_drops_the_cached_search_and_retries_once(self, monkeypatch):
+        """An expired SAS token is the likely cause, and only a fresh, freshly
+        signed search fixes it. The old code answered this by downloading whole
+        tiles to disk instead."""
+        dropped = []
+        _stub(monkeypatch, items=("a",), scored=[(0.99, ["a"])],
+              raises=OSError("HTTP 403"))
+        monkeypatch.setattr(chips.s2, "drop_cell", lambda *a: dropped.append(a))
+        assert _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02"], **OPT) == "read_error"
+        assert len(dropped) == 1, "must invalidate the cached search exactly once"
+
+    def test_screen_pool_is_capped(self, monkeypatch):
+        """A pathological window must not put 60 dates through the SCL screen."""
+        read = _stub(
+            monkeypatch,
+            items=tuple(_FakeItem(f"i{i}", cloud=float(i)) for i in range(60)),
+            scored=[(0.99, ["i0"])],
+            arr=np.ones((1, 8, 8), dtype="float32"),
+        )
+        _month_chip(19.0, -33.0, _FakeGbox(), WIN, ["B02"], **{**OPT, "screen_max_dates": 5})
+        assert read["screened"] == 5
 
 
 def test_thin_labels_order_independent_and_stable() -> None:
@@ -204,12 +195,12 @@ def test_reconcile_manifest_prunes_thinned_out_obs(tmp_path):
     """Stale obs (not in the thinned set) lose their chips + manifest rows."""
     (tmp_path / "keep").mkdir()
     (tmp_path / "drop").mkdir()
-    ck = tmp_path / "keep" / "feb.tif"
-    cd = tmp_path / "drop" / "feb.tif"
+    ck = tmp_path / "keep" / "2023.tif"
+    cd = tmp_path / "drop" / "2023.tif"
     ck.write_bytes(b"x")
     cd.write_bytes(b"x")
     man = pd.DataFrame(
-        {"obs_id": ["keep", "drop"], "chip_uri": [str(ck), str(cd)], "month_label": ["feb", "feb"]}
+        {"obs_id": ["keep", "drop"], "chip_uri": [str(ck), str(cd)], "months": ["feb", "feb"]}
     )
     muri = str(tmp_path / "manifest.parquet")
 
