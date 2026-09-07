@@ -90,8 +90,22 @@ min_valid_frac: 0.85
 # yields ~10-25 dates; this only bounds a pathological one.
 screen_max_dates: 24
 # Concurrent asset reads inside one chip (odc-stac's own pool). Total in-flight
-# sockets is `ingest-chips --max-workers` x this.
-read_pool: 8
+# sockets is `ingest-chips --max-workers` x this. 20 x 8 = 160 streams on a
+# 39 Mbit/s link gives each ~30 KB/s — slow enough that GDAL's stall watchdog
+# killed healthy reads, and each kill throws away a month's download. With
+# ~270 ms latency and a 4.9 MB/s ceiling, a few dozen streams already saturate
+# the link; past that, concurrency buys only contention.
+read_pool: 4
+
+# Side of the square within which chips share a "clearest date" answer, so a
+# neighbour skips the cloud-check reads entirely. Screening is roughly half of
+# what a chip costs to download. Measured on the real 93,348 thinned labels:
+# at 2 km, 69% of labels have a neighbour that already answered (47% at 1 km,
+# 87% at 5 km). 2 km is the conservative pick — the wider the square, the more
+# often a cloud edge inside it makes the remembered date wrong. A wrong answer
+# is cheap: the finished chip is still checked, and a failure falls back to a
+# full screen. Set to 0 to switch the sharing off.
+date_cell_m: 2000
 
 # Acquisition dates medianed per month for `cmrv infer`. A chip takes 1, because
 # a single date can be clear over 1.3 km. No single date is clear over a whole

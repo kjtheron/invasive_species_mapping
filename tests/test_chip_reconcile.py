@@ -269,6 +269,9 @@ def test_interrupt_cancels_queued_work_and_banks_finished_rows(tmp_path, monkeyp
     except KeyboardInterrupt:
         pass
 
+    # shutdown(wait=False) is the point of the fix, so a straggler may still be
+    # in flight. Give it a moment, or it logs after pytest closes the stream.
+    _t.sleep(0.3)
     assert n["i"] < 40, f"kept working after the interrupt ({n['i']} of 40 started)"
     banked = pd.read_parquet(tmp_path / "manifest.parquet")
     assert len(banked) >= 2, "rows finished before the interrupt were not saved"

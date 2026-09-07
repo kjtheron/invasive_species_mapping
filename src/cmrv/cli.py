@@ -192,6 +192,7 @@ def ingest_chips(
     default_year: int = 2023,
     species: list[str] | None = None,
     max_workers: int = 8,
+    read_pool: int | None = None,
     max_dates: int | None = None,
 ) -> None:
     """Extract temporally-aligned training chips for label points (Stage 2b).
@@ -212,7 +213,11 @@ def ingest_chips(
     --block-km: spatial-block size in km (default 10; the CV unit, not a query batch).
     --thin-m: keep one label per species per thin-m cell, before download (default 20).
     --species: restrict to these species (by name fragment). Omit for all.
-    --max-workers: chips in flight. Each also opens ``read_pool`` asset reads.
+    --max-workers: chips in flight. Each also opens ``--read-pool`` asset reads,
+                   so total in-flight sockets is the product. On a slow link keep
+                   that product near a few dozen — past the point that saturates
+                   the link, extra streams only stall each other.
+    --read-pool: concurrent asset reads inside one chip (default from config).
     --max-dates: override ``max_dates_per_month`` — raise it if too many chips
                  drop on cloud, then re-chip everything rather than mixing.
     """
@@ -271,7 +276,8 @@ def ingest_chips(
         min_coverage=cfg.get("min_coverage", 0.98),
         min_valid_frac=cfg.get("min_valid_frac", 0.85),
         screen_max_dates=cfg.get("screen_max_dates", 24),
-        read_pool=cfg.get("read_pool", 8),
+        read_pool=read_pool if read_pool is not None else cfg.get("read_pool", 4),
+        date_cell_m=cfg.get("date_cell_m", 2000.0),
         # A --species run only knows about its own subset, so it must not prune
         # everything else's chips as "no longer in the thinned set".
         reconcile=species is None,

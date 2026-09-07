@@ -41,10 +41,13 @@ os.environ["GDAL_HTTP_TIMEOUT"] = "60"
 os.environ["CPL_VSIL_CURL_TIMEOUT"] = "60"
 os.environ["GDAL_HTTP_MAX_RETRY"] = "3"
 os.environ["GDAL_HTTP_RETRY_DELAY"] = "3"
-# Abort a stalled connection so GDAL's own retry can act. Without these a read
-# that trickles bytes holds its thread for the full 60 s timeout and then fails
-# anyway. Mirrors download_tile.py.
-os.environ["GDAL_HTTP_LOW_SPEED_TIME"] = "30"  # seconds under the limit
+# Abort a genuinely dead connection so GDAL's own retry can act. The threshold
+# has to clear the SLOWEST a healthy stream can legitimately run here. On a
+# 39 Mbit/s link shared by many concurrent reads, a single stream can be starved
+# for a long stretch and still be alive; at 30 s the watchdog was killing reads
+# that would have completed, and each kill throws away a whole month's download.
+# Observed 2026-09-06: aborts 41 minutes BEFORE the token expired, so not expiry.
+os.environ["GDAL_HTTP_LOW_SPEED_TIME"] = "90"  # seconds under the limit
 os.environ["GDAL_HTTP_LOW_SPEED_LIMIT"] = "1"  # bytes/second
 # Fewer requests, fewer redundant bytes.
 os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
@@ -100,6 +103,13 @@ SEARCH_TTL_S = 1200
 STAC_ATTEMPTS = 4
 STAC_BACKOFF_S = 5.0
 
+# Re-sign once the SAS token has under this long to live. planetary_computer
+# refreshes only under 60 s, and it decides that at SIGN time — so a token with
+# four minutes left is judged fine, baked into an href, and dead by the time a
+# read finishes over a slow link. Refreshing early costs one HTTP request per
+# token lifetime; not refreshing costs a whole month's download per failure.
+TOKEN_MIN_TTL_S = 600
+
 
 # ---------------------------------------------------------------------------
 # Client, search, retry
@@ -154,6 +164,41 @@ def _cell_bbox(cell: tuple[int, int]) -> tuple[float, float, float, float]:
 
 _SEARCH_CACHE: dict[tuple, tuple[float, tuple]] = {}
 _SEARCH_LOCK = threading.Lock()
+_REFRESH_LOCK = threading.Lock()
+
+
+def _token_ttl_s() -> float:
+    """Seconds until the earliest cached SAS token expires; ``inf`` if none."""
+    try:
+        from planetary_computer import sas  # type: ignore
+
+        return min((t.ttl() for t in sas.TOKEN_CACHE.values()), default=float("inf"))
+    except Exception:
+        return float("inf")
+
+
+def _refresh_signing() -> None:
+    """Drop the SAS token **and** every cached search that carries it.
+
+    Dropping the token alone is not enough: the cached searches already hold
+    hrefs signed with the dying token, and this cache holds them for
+    :data:`SEARCH_TTL_S`. Both have to go, or the next read still uses a dead
+    signature. This runs about once per token lifetime, so the re-search cost is
+    small against the month-sized downloads it protects.
+    """
+    with _REFRESH_LOCK:
+        if _token_ttl_s() >= TOKEN_MIN_TTL_S:
+            return  # another thread already refreshed while we waited
+        try:
+            from planetary_computer import sas  # type: ignore
+
+            sas.TOKEN_CACHE.clear()
+        except Exception:
+            logger.debug("could not clear the planetary_computer token cache")
+        with _SEARCH_LOCK:
+            n = len(_SEARCH_CACHE)
+            _SEARCH_CACHE.clear()
+    logger.info("SAS token near expiry — re-signing, dropped {} cached searches", n)
 
 
 def search_cell(cell: tuple[int, int], start: str, end: str) -> tuple:
@@ -164,6 +209,10 @@ def search_cell(cell: tuple[int, int], start: str, end: str) -> tuple:
     and search the same cell twice — harmless, and cheaper than holding the lock
     across a network call.
     """
+    # Re-sign BEFORE handing out items, not after a read has already failed.
+    if _token_ttl_s() < TOKEN_MIN_TTL_S:
+        _refresh_signing()
+
     key = (cell, start, end)
     now = time.monotonic()
     with _SEARCH_LOCK:

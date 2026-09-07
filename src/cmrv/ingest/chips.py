@@ -78,12 +78,24 @@ MIN_VALID_FRAC = 0.85
 # Ceiling on candidate dates put through the SCL screen. A padded month over SA
 # yields ~10-25 dates; the cap only bounds a pathological window.
 SCREEN_MAX_DATES = 24
+# Side of the square within which chips share a "clearest date" answer.
+# Screening is roughly half the bytes a chip costs, and it asks the same
+# question of every label. Measured on the real 93,348 thinned labels: at 2 km,
+# 69% of labels have a neighbour that already answered it (47% at 1 km, 87% at
+# 5 km). 2 km is the conservative pick — cloud edges inside a square make the
+# remembered date wrong, and the wider the square the more often that happens.
+# A wrong answer is cheap, not dangerous: the finished chip is still checked,
+# and a failure falls back to a full screen.
+DATE_CELL_M = 2000.0
 # Concurrent asset reads inside one chip. The reads are pure network latency, so
 # concurrency here is nearly free. Measured cold on Planetary Computer over 8
 # scattered SA sites: screening 48 dates took 71.8 s serial against 19.2 s at
 # pool=4; a band load took 19.7 s serial against 7.3 s. Returns flatten past ~8.
-# Total in-flight sockets is max_workers x this.
-READ_POOL = 8
+# Total in-flight sockets is max_workers x this. 20 workers x 8 put 160 streams
+# on a 39 Mbit/s link — 30 KB/s each, slow enough that the stall watchdog killed
+# healthy reads. With ~270 ms latency and a 4.9 MB/s ceiling, a few dozen streams
+# already saturate it; past that, extra concurrency buys only contention.
+READ_POOL = 4
 # Default +/-days around each calendar month. Widening roughly doubles the
 # candidate-date pool, which is what gives the SCL screen something to choose.
 WINDOW_PADDING_DAYS = 15
@@ -258,61 +270,129 @@ def _to_utm(lon: float, lat: float, epsg: int) -> tuple[float, float]:
     return tf.transform(lon, lat)
 
 
+# ponytail: plain dict, never evicted. One date per (square, month, year) —
+# about 90k entries at ~200 bytes, so ~18 MB for a national run. Add eviction
+# only if a run ever holds more than that.
+_DATE_CACHE: dict[tuple, object] = {}
+_DATE_LOCK = threading.Lock()
+
+
+def _date_key(gbox, month_label: str, year: int, cell_m: float) -> tuple | None:
+    """Key a remembered date by square, month and year, or ``None`` if disabled.
+
+    The square is measured in the chip's own UTM zone, and the zone is part of
+    the key, so two chips in different zones can never share an answer by
+    accident. ``cell_m <= 0`` turns the sharing off — that is the documented
+    switch, so it must not divide by zero.
+    """
+    if cell_m <= 0:
+        return None
+    bb = gbox.boundingbox
+    return (gbox.crs.epsg, int(bb.left // cell_m), int(bb.bottom // cell_m), month_label, year)
+
+
+def _recall_date(key: tuple | None):
+    if key is None:
+        return None
+    with _DATE_LOCK:
+        return _DATE_CACHE.get(key)
+
+
+def _remember_date(key: tuple | None, day) -> None:
+    if key is None:
+        return
+    with _DATE_LOCK:
+        _DATE_CACHE[key] = day
+
+
 def _month_chip(
     lon: float,
     lat: float,
     gbox,
     win: dict,
     bands: list[str],
+    year: int,
     *,
     max_dates: int,
     min_coverage: float,
     min_valid_frac: float,
     screen_max_dates: int,
     read_pool: int,
+    date_cell_m: float = DATE_CELL_M,
 ) -> tuple[np.ndarray, float] | str:
     """One month's chip on *gbox*, or a reason string saying why there is none.
+
+    Three passes, in order, each falling through to the next:
+
+    0. **Remembered date.** If a neighbour in the same ``date_cell_m`` square
+       already worked out the clearest date for this month, reuse it and read the
+       bands straight away. This skips the SCL screen, which is roughly half of
+       what a chip costs to download.
+    1. **Full screen.** Read SCL for every candidate date and pick the clearest,
+       then remember it for the neighbours.
+    2. **Full screen after a re-sign**, for a read that failed.
+
+    A remembered date can be wrong where a cloud edge cuts through the square.
+    That is caught, not trusted: the finished chip still has to pass
+    ``min_valid_frac`` and the centre-pixel check, and a failure drops through to
+    pass 1. So a wrong answer costs one wasted read, never a bad chip.
 
     Reason strings are counted by the caller, so a run reports *why* it lost
     chips rather than only how many.
     """
     cell = s2.cell_of(lon, lat)
     chip_wgs84 = gbox.extent.to_crs("EPSG:4326").geom
+    key = _date_key(gbox, win["label"], year, date_cell_m)
+    reason = "no_items"
 
-    for attempt in (1, 2):
-        items = s2.search_cell(cell, win["start"], win["end"])
-        if not items:
-            return "no_items"
-        cov = s2.covering_items(items, chip_wgs84, min_coverage)
-        if not cov:
-            return "no_coverage"
-
-        # Cap the screening pool. Ordering by the scene-level cloud property is
-        # not a filter — it only decides which dates get screened first when a
-        # window is unusually crowded. The per-chip SCL fraction still decides.
-        groups = s2.by_solar_day(cov)
-        if len(groups) > screen_max_dates:
-            groups.sort(key=lambda g: min(i.properties.get("eo:cloud_cover", 100.0) for i in g))
-            groups = groups[:screen_max_dates]
-            cov = [i for g in groups for i in g]
-
+    for attempt in (0, 1, 2):
         try:
-            scored = s2.clear_fraction_per_date(cov, gbox, pool=read_pool)
-            if not scored:
-                return "screen_empty"
-            scored.sort(key=lambda p: -p[0])
-            best = [i for frac, grp in scored[:max_dates] for i in grp]
-            if scored[0][0] < min_valid_frac:
-                return f"screen_clear={scored[0][0]:.2f}"
+            items = s2.search_cell(cell, win["start"], win["end"])
+            if not items:
+                return "no_items"
+            cov = s2.covering_items(items, chip_wgs84, min_coverage)
+            if not cov:
+                return "no_coverage"
+
+            best = None
+            if attempt == 0:
+                day = _recall_date(key)
+                if day is not None:
+                    best = [i for i in cov if i.datetime.date() == day]
+                if not best:
+                    continue  # nothing remembered, or it does not cover this chip
+
+            if best is None:
+                # Cap the screening pool. Ordering by the scene-level cloud
+                # property is not a filter — it only decides which dates get
+                # screened first when a window is unusually crowded. The
+                # per-chip SCL fraction still decides.
+                groups = s2.by_solar_day(cov)
+                if len(groups) > screen_max_dates:
+                    groups.sort(
+                        key=lambda g: min(i.properties.get("eo:cloud_cover", 100.0) for i in g)
+                    )
+                    groups = groups[:screen_max_dates]
+                scored = s2.clear_fraction_per_date(
+                    [i for g in groups for i in g], gbox, pool=read_pool
+                )
+                if not scored:
+                    return "screen_empty"
+                scored.sort(key=lambda p: -p[0])
+                if scored[0][0] < min_valid_frac:
+                    return f"screen_clear={scored[0][0]:.2f}"
+                best = [i for _f, grp in scored[:max_dates] for i in grp]
+
             arr = s2.load_composite(best, gbox, bands, pool=read_pool).values
-            break
+
         except Exception as exc:
-            # The likeliest cause is an expired SAS token on a cached search.
-            # Dropping the cache entry forces a fresh, freshly-signed search —
-            # which is the only thing that helps, and is what the old full-tile
-            # download fallback was flailing at.
-            if attempt == 1:
+            # The likeliest cause is an expired SAS token. Dropping the cached
+            # search forces a fresh, freshly-signed one — which is the only thing
+            # that helps, and is what the old full-tile download fallback was
+            # flailing at.
+            if attempt < 2:
                 s2.drop_cell(cell, win["start"], win["end"])
+                reason = "read_error"
                 continue
             logger.warning(
                 "read failed twice for {} after a re-sign: {}: {}",
@@ -320,12 +400,21 @@ def _month_chip(
             )
             return "read_error"
 
-    frac = s2.valid_fraction(arr)
-    if frac < min_valid_frac:
-        return f"low_valid={frac:.2f}"
-    if not s2.center_is_valid(arr):
-        return "center_cloudy"
-    return arr, frac
+        frac = s2.valid_fraction(arr)
+        if frac < min_valid_frac:
+            reason = f"low_valid={frac:.2f}"
+        elif not s2.center_is_valid(arr):
+            reason = "center_cloudy"
+        else:
+            if attempt > 0:  # a date this chip screened itself is worth sharing
+                _remember_date(key, best[0].datetime.date())
+            return arr, frac
+
+        if attempt == 0:
+            continue  # the remembered date does not work here — screen properly
+        return reason
+
+    return reason
 
 
 def _write_chip(
@@ -385,7 +474,7 @@ def _process_obs(row, months_cfg: list[dict], bands: list[str], out_prefix: str,
 
     frames, fracs, months = [], [], []
     for win in temporal_windows(year, months_cfg, opt["padding_days"]):
-        res = _month_chip(row.lon, row.lat, gbox, win, bands, **opt["month"])
+        res = _month_chip(row.lon, row.lat, gbox, win, bands, year, **opt["month"])
         if isinstance(res, str):
             return f"{win['label']}:{res}"
         frames.append(res[0])
@@ -623,6 +712,7 @@ def extract_training_chips(
     screen_max_dates: int = SCREEN_MAX_DATES,
     padding_days: int = WINDOW_PADDING_DAYS,
     read_pool: int = READ_POOL,
+    date_cell_m: float = DATE_CELL_M,
     default_year: int = 2023,
     max_workers: int = 8,
     year_fallback: bool = True,
@@ -723,6 +813,7 @@ def extract_training_chips(
             "min_valid_frac": min_valid_frac,
             "screen_max_dates": screen_max_dates,
             "read_pool": read_pool,
+            "date_cell_m": date_cell_m,
         },
     }
 
@@ -752,6 +843,7 @@ def extract_training_chips(
                 screen_max_dates=screen_max_dates,
                 padding_days=padding_days,
                 read_pool=read_pool,
+                date_cell_m=date_cell_m,
                 default_year=default_year,
                 max_workers=max_workers,
                 year_fallback=False,
@@ -766,70 +858,95 @@ def extract_training_chips(
 def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, existing, manifest_uri):
     """Run every label through the thread pool, flushing the manifest periodically.
 
-    Labels are sorted by coarse geographic cell first. Neighbours then run back to
-    back, which turns the per-cell STAC search cache into near-pure hits and lets
-    GDAL's block cache serve the second chip of a 512-block for free. Labels
-    thinned at 20 m put many chips inside one block, so this is most of the win.
+    **One work unit is one square, not one chip.** A square's chips run one after
+    another inside a single worker, which is what makes the remembered-date cache
+    pay: the first chip in the square works out the clearest month, and its
+    neighbours read the answer instead of downloading the cloud maps again.
+
+    Handing each chip to its own worker looks more parallel and is worse. With 8
+    workers, all of a square's chips start before any of them has an answer to
+    share, so every one screens and the cache never gets a hit — measured at
+    0.99x, i.e. nothing. Sequencing within a square also keeps GDAL's block cache
+    warm, because neighbours read the same 512-block.
+
+    Squares are visited in geographic order, so consecutive workers stay near
+    each other and the per-cell STAC search cache is near-pure hits.
     """
     # itertuples() renames any column whose name starts with "_" to a positional
     # placeholder, so `row._zone` silently resolves to nothing. Rename first; the
     # public column names stay `_year` / `_zone` for callers.
-    work = labels.assign(
-        cell=[s2.cell_of(lo, la) for lo, la in zip(labels["lon"], labels["lat"], strict=True)]
-    ).rename(columns={"_year": "obs_year", "_zone": "zone"})
-    todo = list(work.sort_values(["cell", "obs_year"], kind="stable").itertuples())
-    logger.info("extracting {} chips with {} workers x {} read threads",
-                len(todo), max_workers, opt["month"]["read_pool"])
+    work = labels.rename(columns={"_year": "obs_year", "_zone": "zone"}).copy()
+    cell_m = opt["month"]["date_cell_m"] or opt["chip_px"] * opt["resolution_m"]
+    sq, geo = [], []
+    for lo, la in zip(work["lon"], work["lat"], strict=True):
+        e = utm_epsg(lo, la)
+        x, y = _to_utm(lo, la, e)
+        sq.append((e, int(x // cell_m), int(y // cell_m)))
+        geo.append(s2.cell_of(lo, la))
+    work["cell"], work["sq"] = geo, sq
+
+    squares: dict[tuple, list] = {}
+    for row in work.sort_values(["cell", "obs_year"], kind="stable").itertuples():
+        squares.setdefault((row.cell, row.sq), []).append(row)
+    units = list(squares.values())
+    n_todo = len(work)
+    logger.info(
+        "extracting {} chips in {} squares, {} workers x {} read threads",
+        n_todo, len(units), max_workers, opt["month"]["read_pool"],
+    )
 
     rows: list[dict] = []
     drops: dict[str, int] = {}
     lock = threading.Lock()
     t0 = last = time.perf_counter()
+    seen = 0
 
-    def run(row):
-        try:
-            return _process_obs(row, months_by_zone[row.zone], bands, out_prefix, opt)
-        except Exception as exc:  # one bad label must never end the run
-            logger.debug("obs {} failed: {}: {}", row.obs_id, type(exc).__name__, exc)
-            return f"error:{type(exc).__name__}"
+    def run_square(unit):
+        out = []
+        for row in unit:
+            try:
+                out.append(_process_obs(row, months_by_zone[row.zone], bands, out_prefix, opt))
+            except Exception as exc:  # one bad label must never end the run
+                logger.debug("obs {} failed: {}: {}", row.obs_id, type(exc).__name__, exc)
+                out.append(f"error:{type(exc).__name__}")
+        return out
 
     # NOT `with ThreadPoolExecutor(...)`. Its __exit__ calls shutdown(wait=True),
-    # which drains every future already queued — and every chip is queued up
+    # which drains every future already queued — and every square is queued up
     # front — so a single Ctrl+C looked like a hang and kept chipping to the end
     # of the run. Measured on 2000 queued tasks: 25.1 s to stop that way against
-    # 0.3 s with cancel_futures. On a 93k-label run that is the difference
-    # between stopping now and stopping in six days.
+    # 0.3 s with cancel_futures.
     pool = ThreadPoolExecutor(max_workers=max_workers)
     try:
-        futures = [pool.submit(run, r) for r in todo]
-        for n, fut in enumerate(as_completed(futures), 1):
+        futures = [pool.submit(run_square, u) for u in units]
+        for fut in as_completed(futures):
             # A KeyboardInterrupt raised inside a worker is a BaseException, so
-            # `run`'s `except Exception` lets it through and it re-raises here.
-            res = fut.result()
-            with lock:
-                if isinstance(res, dict):
-                    rows.append(res)
-                    if len(rows) % FLUSH_EVERY == 0:
-                        _flush(existing, rows, manifest_uri)
-                else:
-                    key = res.split("=")[0]
-                    drops[key] = drops.get(key, 0) + 1
+            # `run_square`'s `except Exception` lets it through and it re-raises here.
+            for res in fut.result():
+                with lock:
+                    seen += 1
+                    if isinstance(res, dict):
+                        rows.append(res)
+                        if len(rows) % FLUSH_EVERY == 0:
+                            _flush(existing, rows, manifest_uri)
+                    else:
+                        key = res.split("=")[0]
+                        drops[key] = drops.get(key, 0) + 1
             now = time.perf_counter()
-            if n % 200 == 0 or now - last >= 60.0:
-                rate = n / max(now - t0, 1e-6)
+            if now - last >= 60.0:
+                rate = seen / max(now - t0, 1e-6)
                 top = ", ".join(
                     f"{k}={v}" for k, v in sorted(drops.items(), key=lambda kv: -kv[1])[:4]
                 )
                 logger.info(
-                    "progress: {}/{} ({:.1f}%), {} chips, {:.1f} obs/s, eta {:.0f} min"
-                    "{}",
-                    n, len(todo), 100 * n / len(todo), len(rows), rate,
-                    (len(todo) - n) / max(rate, 1e-6) / 60,
+                    "progress: {}/{} ({:.1f}%), {} chips, {:.2f} obs/s, eta {:.0f} min{}",
+                    seen, n_todo, 100 * seen / n_todo, len(rows), rate,
+                    (n_todo - seen) / max(rate, 1e-6) / 60,
                     f" | drops: {top}" if top else "",
                 )
                 last = now
     except KeyboardInterrupt:
-        logger.warning("interrupted — cancelling queued chips and saving {} rows", len(rows))
+        logger.warning("interrupted — cancelling queued squares and saving {} rows", len(rows))
         pool.shutdown(wait=False, cancel_futures=True)
         raise
     finally:
@@ -841,6 +958,7 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
 
     if drops:
         logger.info("drops: {}", dict(sorted(drops.items(), key=lambda kv: -kv[1])))
+    logger.info("date cache: {} answers remembered across {} squares", len(_DATE_CACHE), len(units))
     return rows
 
 
