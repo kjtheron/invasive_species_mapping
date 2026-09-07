@@ -275,3 +275,109 @@ def test_interrupt_cancels_queued_work_and_banks_finished_rows(tmp_path, monkeyp
     assert n["i"] < 40, f"kept working after the interrupt ({n['i']} of 40 started)"
     banked = pd.read_parquet(tmp_path / "manifest.parquet")
     assert len(banked) >= 2, "rows finished before the interrupt were not saved"
+
+
+# --- losing as little as possible when a run is killed -----------------------
+
+
+def _stub_process(monkeypatch, on_call=None):
+    """Replace _process_obs with a fast stub that returns valid manifest rows."""
+    from cmrv.ingest import chips as C
+
+    n = {"i": 0}
+
+    def fake(row, months_cfg, bands, out_prefix, opt):
+        n["i"] += 1
+        if on_call:
+            on_call(n["i"])
+        return {
+            "obs_id": row.obs_id, "species": "pinus", "year": 2023, "block_id": 0,
+            "lon": 18.5, "lat": -33.9, "chip_uri": f"{out_prefix}/{row.obs_id}/2023.tif",
+            "months": "feb,may,sep", "n_months": 3, "valid_frac": 1.0, "utm_epsg": 32734,
+        }
+
+    monkeypatch.setattr(C, "_process_obs", fake)
+    return n
+
+
+def test_sigterm_saves_its_rows_like_ctrl_c(tmp_path, monkeypatch):
+    """`pkill` must not be a trap.
+
+    Python's default SIGTERM handler ends the process outright — no `finally`,
+    so every manifest row since the last flush is lost. That is where the 487
+    orphaned chips of 2026-09-06 came from: the advice was to stop the run with
+    `pkill`. SIGTERM now raises KeyboardInterrupt so it reaches the same save
+    path Ctrl+C does.
+    """
+    import os
+    import signal
+    import time as _t
+
+    import pandas as pd
+
+    from cmrv.ingest import chips as C
+
+    def maybe_term(i):
+        if i == 4:
+            os.kill(os.getpid(), signal.SIGTERM)
+        _t.sleep(0.02)
+
+    _stub_process(monkeypatch, on_call=maybe_term)
+    try:
+        C.extract_training_chips(
+            labels=_labels([f"s{i}" for i in range(40)]), months_by_zone=BY_ZONE,
+            bands=["B02"], out_prefix=str(tmp_path), max_workers=1,
+        )
+        raise AssertionError("SIGTERM did not reach the save path — pkill still loses rows")
+    except KeyboardInterrupt:
+        pass
+    _t.sleep(0.3)
+    banked = pd.read_parquet(tmp_path / "manifest.parquet")
+    # Rows are collected per completed square, so the exact count depends on how
+    # far the run got. What matters is that finished work was banked at all —
+    # under the old behaviour the manifest did not exist.
+    assert len(banked) >= 1, "rows finished before the SIGTERM were not saved"
+    assert len(banked) < 40, "SIGTERM did not stop the run"
+
+
+def test_sigterm_handler_is_restored_afterwards(tmp_path, monkeypatch):
+    """The guard must not leak: a library that changes global signal state and
+    does not put it back is a trap for whatever runs next."""
+    import signal
+
+    from cmrv.ingest import chips as C
+
+    before = signal.getsignal(signal.SIGTERM)
+    _stub_process(monkeypatch)
+    C.extract_training_chips(
+        labels=_labels(["a", "b"]), months_by_zone=BY_ZONE, bands=["B02"],
+        out_prefix=str(tmp_path), max_workers=1,
+    )
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_flush_is_bounded_by_the_clock_not_only_the_count(tmp_path, monkeypatch):
+    """At ~0.15 chips/s a count of 500 alone leaves a 55-minute window in which a
+    hard stop loses every row. The clock is what bounds it."""
+    import pandas as pd
+
+    from cmrv.ingest import chips as C
+
+    monkeypatch.setattr(C, "FLUSH_EVERY", 10_000)  # count bound can never trip
+    monkeypatch.setattr(C, "FLUSH_SECONDS", 0.0)  # clock bound trips every row
+
+    writes = {"n": 0}
+    real = C._flush
+
+    def counting(existing, rows, uri):
+        writes["n"] += 1
+        return real(existing, rows, uri)
+
+    monkeypatch.setattr(C, "_flush", counting)
+    _stub_process(monkeypatch)
+    C.extract_training_chips(
+        labels=_labels([f"f{i}" for i in range(6)]), months_by_zone=BY_ZONE,
+        bands=["B02"], out_prefix=str(tmp_path), max_workers=1,
+    )
+    assert writes["n"] > 2, "manifest was only written at the end — clock bound not firing"
+    assert len(pd.read_parquet(tmp_path / "manifest.parquet")) == 6

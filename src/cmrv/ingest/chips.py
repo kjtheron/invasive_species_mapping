@@ -43,9 +43,11 @@ CRS handling:
 
 from __future__ import annotations
 
+import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 
 import geopandas as gpd  # type: ignore
@@ -99,9 +101,41 @@ READ_POOL = 4
 # Default +/-days around each calendar month. Widening roughly doubles the
 # candidate-date pool, which is what gives the SCL screen something to choose.
 WINDOW_PADDING_DAYS = 15
-# Rows buffered before the manifest is rewritten. A crash loses at most this many
-# manifest rows; the chips themselves are on disk and the next run re-adopts them.
+# The manifest is rewritten after this many new rows, OR after this many seconds,
+# whichever comes first. The time bound is the one that matters: at ~0.15 chips/s
+# a count of 500 alone leaves a 55-minute window in which a hard stop loses every
+# row since the last flush. Those chips are still on disk and _adopt_orphan_chips
+# reads them back, but that is a repair, not a plan. One small Parquet write a
+# minute is nothing against 29 MB per chip.
 FLUSH_EVERY = 500
+FLUSH_SECONDS = 60.0
+
+
+def _raise_interrupt(_signum, _frame):
+    raise KeyboardInterrupt
+
+
+@contextmanager
+def _term_saves_work():
+    """Make SIGTERM behave like Ctrl+C for the duration of the block.
+
+    Python's default SIGTERM handler ends the process outright: no ``finally``,
+    so every manifest row since the last flush is lost and its chips have to be
+    re-adopted from disk on the next start. Ctrl+C already ran the save path, so
+    ``pkill`` and Ctrl+C behaved completely differently with nothing to say so.
+
+    Restores the previous handler on exit. No-ops off the main thread, where
+    ``signal.signal`` raises, so tests and subprocesses can use it safely.
+    """
+    try:
+        prev = signal.signal(signal.SIGTERM, _raise_interrupt)
+    except ValueError:  # not the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, prev)
 
 
 # ---------------------------------------------------------------------------
@@ -898,40 +932,34 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
     rows: list[dict] = []
     drops: dict[str, int] = {}
     lock = threading.Lock()
-    t0 = last = time.perf_counter()
+    t0 = last = last_flush = time.perf_counter()
     seen = 0
 
-    def run_square(unit):
-        out = []
-        for row in unit:
-            try:
-                out.append(_process_obs(row, months_by_zone[row.zone], bands, out_prefix, opt))
-            except Exception as exc:  # one bad label must never end the run
-                logger.debug("obs {} failed: {}: {}", row.obs_id, type(exc).__name__, exc)
-                out.append(f"error:{type(exc).__name__}")
-        return out
+    def publish(res) -> None:
+        """Bank one chip's result the moment it exists.
 
-    # NOT `with ThreadPoolExecutor(...)`. Its __exit__ calls shutdown(wait=True),
-    # which drains every future already queued — and every square is queued up
-    # front — so a single Ctrl+C looked like a hang and kept chipping to the end
-    # of the run. Measured on 2000 queued tasks: 25.1 s to stop that way against
-    # 0.3 s with cancel_futures.
-    pool = ThreadPoolExecutor(max_workers=max_workers)
-    try:
-        futures = [pool.submit(run_square, u) for u in units]
-        for fut in as_completed(futures):
-            # A KeyboardInterrupt raised inside a worker is a BaseException, so
-            # `run_square`'s `except Exception` lets it through and it re-raises here.
-            for res in fut.result():
-                with lock:
-                    seen += 1
-                    if isinstance(res, dict):
-                        rows.append(res)
-                        if len(rows) % FLUSH_EVERY == 0:
-                            _flush(existing, rows, manifest_uri)
-                    else:
-                        key = res.split("=")[0]
-                        drops[key] = drops.get(key, 0) + 1
+        Workers call this per chip rather than returning a list per square.
+        Returning per square held every row hostage until the whole square
+        finished — measured: a SIGTERM mid-square left 10 chips on disk with 1
+        manifest row. A dense square holds hundreds of labels, so that window
+        scales with the survey, which is exactly what a work unit must never do.
+        """
+        nonlocal seen, last, last_flush
+        with lock:
+            seen += 1
+            if isinstance(res, dict):
+                rows.append(res)
+                # Whichever bound trips first. The clock is the one that matters:
+                # it keeps the exposure window at a minute even when chips are slow.
+                if (
+                    len(rows) % FLUSH_EVERY == 0
+                    or time.perf_counter() - last_flush >= FLUSH_SECONDS
+                ):
+                    _flush(existing, rows, manifest_uri)
+                    last_flush = time.perf_counter()
+            else:
+                drops[res.split("=")[0]] = drops.get(res.split("=")[0], 0) + 1
+
             now = time.perf_counter()
             if now - last >= 60.0:
                 rate = seen / max(now - t0, 1e-6)
@@ -945,13 +973,49 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
                     f" | drops: {top}" if top else "",
                 )
                 last = now
+
+    def run_square(unit):
+        """Chips of one square, in order — that sequencing is what lets the
+        remembered-date cache hit. Each result is published as it lands."""
+        for row in unit:
+            try:
+                publish(_process_obs(row, months_by_zone[row.zone], bands, out_prefix, opt))
+            except Exception as exc:  # one bad label must never end the run
+                logger.debug("obs {} failed: {}: {}", row.obs_id, type(exc).__name__, exc)
+                publish(f"error:{type(exc).__name__}")
+
+    # NOT `with ThreadPoolExecutor(...)`. Its __exit__ calls shutdown(wait=True),
+    # which drains every future already queued — and every square is queued up
+    # front — so a single Ctrl+C looked like a hang and kept chipping to the end
+    # of the run. Measured on 2000 queued tasks: 25.1 s to stop that way against
+    # 0.3 s with cancel_futures.
+    pool = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        # SIGTERM raises KeyboardInterrupt in here, so `pkill` reaches the same
+        # save path Ctrl+C does instead of ending the process where it stands.
+        with _term_saves_work():
+            futures = [pool.submit(run_square, u) for u in units]
+            for fut in as_completed(futures):
+                # A KeyboardInterrupt raised inside a worker is a BaseException,
+                # so `run_square`'s `except Exception` lets it through and it
+                # re-raises here. Rows are already banked by publish().
+                fut.result()
     except KeyboardInterrupt:
         logger.warning("interrupted — cancelling queued squares and saving {} rows", len(rows))
         pool.shutdown(wait=False, cancel_futures=True)
         raise
     finally:
         # Bank whatever finished before re-raising. Without this the rows since
-        # the last flush are lost, and their chips get downloaded a second time.
+        # the last flush are lost, and their chips have to be re-adopted from
+        # disk on the next start.
+        #
+        # A couple of rows can still escape: shutdown(wait=False) leaves the
+        # running workers to finish their current chip, and one that publishes
+        # after this flush lands nowhere. Waiting for them would undo the whole
+        # point of cancel_futures. Measured on a live SIGTERM: 2 orphans of 11
+        # chips, down from 10 before rows published per chip — and the next start
+        # adopts those 2 off disk for free. The safety net is the right place for
+        # a residue this small.
         pool.shutdown(wait=False)
         with lock:
             _flush(existing, rows, manifest_uri)
