@@ -46,6 +46,7 @@ from __future__ import annotations
 import signal
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
@@ -114,6 +115,31 @@ FLUSH_SECONDS = 60.0
 # a chip takes ~15 s, so without this those rows land on disk with no manifest
 # row and have to be adopted on the next start.
 DRAIN_SECONDS = 30.0
+# Window for the rate shown in the progress line. A cumulative average over a
+# multi-day run is nearly useless: it is dominated by the cold first minutes for
+# hours, and once the run is long it can no longer move, so a slowdown never
+# shows. Measure the recent past instead.
+RATE_WINDOW_S = 600.0
+# A window shorter than this has too little in it to mean anything, so the line
+# falls back to the cumulative average and says so.
+RATE_MIN_SPAN_S = 120.0
+
+
+def _recent_rate(
+    recent: "deque[tuple[float, int]]", seen: int, now: float, t0: float
+) -> tuple[float, str]:
+    """Rate over the trailing :data:`RATE_WINDOW_S`, and the label to print.
+
+    Trims samples older than the window, then measures across what is left. Falls
+    back to the cumulative average while the window is still filling, and names
+    which one it used — a rate with no stated basis is worse than no rate.
+    """
+    while len(recent) > 1 and now - recent[0][0] > RATE_WINDOW_S:
+        recent.popleft()
+    span = now - recent[0][0] if recent else 0.0
+    if recent and span >= RATE_MIN_SPAN_S:
+        return (seen - recent[0][1]) / span, f"{span / 60:.0f}m avg"
+    return seen / max(now - t0, 1e-6), "since start"
 
 
 def _raise_interrupt(_signum, _frame):
@@ -944,6 +970,7 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
     stop = threading.Event()
     t0 = last = last_flush = time.perf_counter()
     seen = 0
+    recent: deque[tuple[float, int]] = deque()  # (clock, seen) inside RATE_WINDOW_S
 
     def publish(res) -> None:
         """Bank one chip's result the moment it exists.
@@ -972,14 +999,15 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
 
             now = time.perf_counter()
             if now - last >= 60.0:
-                rate = seen / max(now - t0, 1e-6)
+                recent.append((now, seen))
+                rate, label = _recent_rate(recent, seen, now, t0)
                 top = ", ".join(
                     f"{k}={v}" for k, v in sorted(drops.items(), key=lambda kv: -kv[1])[:4]
                 )
                 logger.info(
-                    "progress: {}/{} ({:.1f}%), {} chips, {:.2f} obs/s, eta {:.0f} min{}",
-                    seen, n_todo, 100 * seen / n_todo, len(rows), rate,
-                    (n_todo - seen) / max(rate, 1e-6) / 60,
+                    "progress: {}/{} ({:.1f}%), {} chips, {:.3f} obs/s ({}), eta {:.0f} h{}",
+                    seen, n_todo, 100 * seen / n_todo, len(rows), rate, label,
+                    (n_todo - seen) / max(rate, 1e-6) / 3600,
                     f" | drops: {top}" if top else "",
                 )
                 last = now

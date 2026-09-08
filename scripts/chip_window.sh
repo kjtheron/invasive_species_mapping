@@ -26,7 +26,7 @@ set -uo pipefail
 
 PROJECT="${PROJECT:-/home/kjtheron/Projects/invasive_species_mapping}"
 STOP_AT="${1:-${STOP_AT:-05:00}}"    # when to stop; anything `date -d` understands
-WORKERS="${WORKERS:-8}"
+WORKERS="${WORKERS:-20}"   # x read_pool 4 = 80 streams, the measured peak
 LOG="${LOG:-$PROJECT/logs/chip_window.log}"
 LOCK="$PROJECT/.chip_window.lock"
 DONE_MARK="$PROJECT/data/chips/train/.all_chipped"

@@ -95,6 +95,10 @@ screen_max_dates: 24
 # killed healthy reads, and each kill throws away a month's download. With
 # ~270 ms latency and a 4.9 MB/s ceiling, a few dozen streams already saturate
 # the link; past that, concurrency buys only contention.
+# Measured on this link, 2026-09-08: 32 streams -> 0.079 obs/s (50% of the
+# 39 Mbit/s cap), 80 -> 0.107 (70%), 160 -> 0.077 with read_errors returning.
+# 80 is the peak: below it the link starves, above it streams stall and each
+# stall now costs a full re-screen plus re-download. 20 workers x 4 = 80.
 read_pool: 4
 
 # Side of the square within which chips share a "clearest date" answer, so a

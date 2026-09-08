@@ -15,6 +15,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import pytest
 from shapely.geometry import Point
 
 from cmrv.ingest.chips import _reconcile_manifest, extract_training_chips
@@ -442,3 +443,60 @@ def test_a_stop_does_not_start_new_chips_inside_a_running_square(tmp_path, monke
     assert n["i"] < 60, f"kept starting chips after the stop ({n['i']} of 60)"
     banked = pd.read_parquet(tmp_path / "manifest.parquet")
     assert len(banked) >= 1, "the drain window banked nothing"
+
+
+class TestRecentRate:
+    """A cumulative average over a multi-day run cannot show a slowdown.
+
+    It is dominated by the cold first minutes for hours, and once the run is long
+    it barely moves — so the rate stops being a signal at exactly the point you
+    need it. `_recent_rate` measures the trailing window instead.
+    """
+
+    def test_falls_back_while_the_window_is_still_filling(self):
+        from collections import deque
+
+        from cmrv.ingest.chips import _recent_rate
+
+        rate, label = _recent_rate(deque([(100.0, 10)]), 12, 130.0, 0.0)
+        assert label == "since start"
+        assert rate == pytest.approx(12 / 130.0)
+
+    def test_measures_the_trailing_window_once_filled(self):
+        from collections import deque
+
+        from cmrv.ingest.chips import _recent_rate
+
+        # 300 s ago the run had done 100; it has done 400 now -> 1.0 obs/s.
+        rate, label = _recent_rate(deque([(0.0, 100)]), 400, 300.0, 0.0)
+        assert rate == pytest.approx(1.0)
+        assert label == "5m avg"
+
+    def test_a_slowdown_shows_in_the_recent_rate_but_not_the_cumulative_one(self):
+        from collections import deque
+
+        from cmrv.ingest.chips import _recent_rate
+
+        # A fast first hour (3600 obs), then 300 s that produced only 30.
+        recent = deque([(3600.0, 3600)])
+        rate, _ = _recent_rate(recent, 3630, 3900.0, 0.0)
+        cumulative = 3630 / 3900.0
+        assert rate == pytest.approx(0.1), "recent rate missed the slowdown"
+        assert cumulative > 0.9, "cumulative average hides it entirely"
+
+    def test_samples_older_than_the_window_are_dropped(self):
+        from collections import deque
+
+        from cmrv.ingest.chips import _recent_rate, RATE_WINDOW_S
+
+        old = deque([(0.0, 0), (RATE_WINDOW_S + 100.0, 50), (RATE_WINDOW_S + 400.0, 80)])
+        _recent_rate(old, 90, RATE_WINDOW_S + 500.0, 0.0)
+        assert old[0][0] > 0.0, "stale sample was kept, so the window never moves"
+
+    def test_never_divides_by_zero_on_the_very_first_tick(self):
+        from collections import deque
+
+        from cmrv.ingest.chips import _recent_rate
+
+        rate, label = _recent_rate(deque(), 0, 0.0, 0.0)
+        assert rate == 0.0 and label == "since start"
