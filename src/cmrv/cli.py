@@ -517,6 +517,17 @@ def main() -> None:
     )
     logger.info("log file: {}", log_path)
 
+    # A stop is a normal way to end a long run, not a crash. Without this the
+    # KeyboardInterrupt (raised by Ctrl+C, or by SIGTERM via _term_saves_work)
+    # printed a full traceback over the log, which reads like a failure.
+    try:
+        _run_cli()
+    except KeyboardInterrupt:
+        logger.warning("stopped by request — finished work was saved")
+        sys.exit(130)
+
+
+def _run_cli() -> None:
     tyro.extras.subcommand_cli_from_dict(
         {
             "aoi-sa": aoi_sa,

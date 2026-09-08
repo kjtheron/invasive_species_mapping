@@ -381,3 +381,64 @@ def test_flush_is_bounded_by_the_clock_not_only_the_count(tmp_path, monkeypatch)
     )
     assert writes["n"] > 2, "manifest was only written at the end — clock bound not firing"
     assert len(pd.read_parquet(tmp_path / "manifest.parquet")) == 6
+
+
+def test_a_stop_does_not_start_new_chips_inside_a_running_square(tmp_path, monkeypatch):
+    """Cancelling queued futures does not stop a RUNNING one, and a square holds
+    many chips — a dense one holds hundreds.
+
+    Without a stop flag the workers kept starting new chips for ~50 s after the
+    interrupt, failing with "cannot schedule new futures after interpreter
+    shutdown" and writing chips nobody banked. Observed on a live stop: 19 chips
+    on disk, 0 manifest rows.
+    """
+    import threading
+    import time as _t
+
+    import pandas as pd
+
+    from cmrv.ingest import chips as C
+
+    n = {"i": 0}
+    lk = threading.Lock()
+
+    def fake(row, months_cfg, bands, out_prefix, opt):
+        with lk:
+            n["i"] += 1
+            i = n["i"]
+        if i == 3:
+            raise KeyboardInterrupt
+        _t.sleep(0.05)
+        return {
+            "obs_id": row.obs_id, "species": "pinus", "year": 2023, "block_id": 0,
+            "lon": 18.5, "lat": -33.9, "chip_uri": f"{out_prefix}/{row.obs_id}/2023.tif",
+            "months": "feb,may,sep", "n_months": 3, "valid_frac": 1.0, "utm_epsg": 32734,
+        }
+
+    monkeypatch.setattr(C, "_process_obs", fake)
+    monkeypatch.setattr(C, "DRAIN_SECONDS", 2.0)
+    # All 60 labels at one spot, so they land in ONE square and one worker takes
+    # the lot — the case the stop flag exists for.
+    labels = gpd.GeoDataFrame(
+        {
+            "obs_id": [f"q{i}" for i in range(60)],
+            "species_normalized": ["pinus"] * 60,
+            "block_id": [0] * 60,
+            "event_date": ["2023-06-01"] * 60,
+            "_zone": ["winter_rainfall"] * 60,
+        },
+        geometry=[Point(18.5, -33.9)] * 60,
+        crs="EPSG:4326",
+    )
+    try:
+        C.extract_training_chips(
+            labels=labels, months_by_zone=BY_ZONE, bands=["B02"],
+            out_prefix=str(tmp_path), max_workers=2,
+        )
+        raise AssertionError("KeyboardInterrupt did not propagate")
+    except KeyboardInterrupt:
+        pass
+    _t.sleep(0.5)
+    assert n["i"] < 60, f"kept starting chips after the stop ({n['i']} of 60)"
+    banked = pd.read_parquet(tmp_path / "manifest.parquet")
+    assert len(banked) >= 1, "the drain window banked nothing"

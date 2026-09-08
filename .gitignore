@@ -23,3 +23,6 @@ dataset_lookup_international.csv
 # Project roadmaps
 tasks/
 CLAUDE.md
+
+# nightly chip window lock
+.chip_window.lock

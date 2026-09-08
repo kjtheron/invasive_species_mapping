@@ -109,6 +109,11 @@ WINDOW_PADDING_DAYS = 15
 # minute is nothing against 29 MB per chip.
 FLUSH_EVERY = 500
 FLUSH_SECONDS = 60.0
+# After a stop is requested, how long to let the chips already in flight finish
+# and bank their rows. Cancelling the queue does not stop a worker mid-chip, and
+# a chip takes ~15 s, so without this those rows land on disk with no manifest
+# row and have to be adopted on the next start.
+DRAIN_SECONDS = 30.0
 
 
 def _raise_interrupt(_signum, _frame):
@@ -932,6 +937,11 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
     rows: list[dict] = []
     drops: dict[str, int] = {}
     lock = threading.Lock()
+    # Cancelling queued futures does not stop a RUNNING one, and a square holds
+    # many chips. Without this flag the workers kept starting new chips for ~50 s
+    # after Ctrl+C, failing with "cannot schedule new futures after interpreter
+    # shutdown" and writing chips nobody banked. Observed on a live stop.
+    stop = threading.Event()
     t0 = last = last_flush = time.perf_counter()
     seen = 0
 
@@ -978,6 +988,8 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
         """Chips of one square, in order — that sequencing is what lets the
         remembered-date cache hit. Each result is published as it lands."""
         for row in unit:
+            if stop.is_set():  # a stop was requested — start no new chip
+                return
             try:
                 publish(_process_obs(row, months_by_zone[row.zone], bands, out_prefix, opt))
             except Exception as exc:  # one bad label must never end the run
@@ -1001,24 +1013,29 @@ def _run_pool(labels, months_by_zone, bands, out_prefix, opt, max_workers, exist
                 # re-raises here. Rows are already banked by publish().
                 fut.result()
     except KeyboardInterrupt:
-        logger.warning("interrupted — cancelling queued squares and saving {} rows", len(rows))
+        stop.set()
+        logger.warning("interrupted — cancelling queued squares, letting in-flight chips finish")
         pool.shutdown(wait=False, cancel_futures=True)
         raise
     finally:
         # Bank whatever finished before re-raising. Without this the rows since
         # the last flush are lost, and their chips have to be re-adopted from
         # disk on the next start.
-        #
-        # A couple of rows can still escape: shutdown(wait=False) leaves the
-        # running workers to finish their current chip, and one that publishes
-        # after this flush lands nowhere. Waiting for them would undo the whole
-        # point of cancel_futures. Measured on a live SIGTERM: 2 orphans of 11
-        # chips, down from 10 before rows published per chip — and the next start
-        # adopts those 2 off disk for free. The safety net is the right place for
-        # a residue this small.
+        stop.set()
         pool.shutdown(wait=False)
+        # Give the chips already in flight a moment to publish. `stop` means no
+        # NEW chip starts, so this waits out at most one chip per worker — and it
+        # turns rows that would have been orphaned into banked ones. Bounded, so
+        # a wedged read cannot hold the stop open.
+        deadline = time.perf_counter() + DRAIN_SECONDS
+        while (
+            any(not f.done() for f in locals().get("futures", []))
+            and time.perf_counter() < deadline
+        ):
+            time.sleep(0.2)
         with lock:
             _flush(existing, rows, manifest_uri)
+        logger.info("saved {} rows to the manifest", len(rows))
 
     if drops:
         logger.info("drops: {}", dict(sorted(drops.items(), key=lambda kv: -kv[1])))

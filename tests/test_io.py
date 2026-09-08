@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import tempfile
 from pathlib import Path
 
@@ -89,3 +90,38 @@ def test_write_cog_2d_input() -> None:
         with rasterio.open(out) as src:
             assert src.count == 1
             assert src.read(1).shape == (16, 16)
+
+
+def test_write_parquet_df_is_atomic(tmp_path):
+    """A kill mid-write must leave the PREVIOUS manifest, not a truncated one.
+
+    ingest-chips rewrites manifest.parquet every minute for days. Writing in
+    place made each of those a window in which losing the process lost the whole
+    record of the run.
+    """
+    import os
+
+    import pandas as pd
+
+    from cmrv.io import read_parquet_df, write_parquet_df
+
+    uri = str(tmp_path / "m.parquet")
+    write_parquet_df(pd.DataFrame({"a": [1, 2, 3]}), uri)
+
+    # Simulate a crash inside the write: the temp file blows up after creation.
+    real = pd.DataFrame.to_parquet
+
+    def exploding(self, path, **kw):
+        real(self, path, **kw)
+        raise OSError("killed mid-write")
+
+    pd.DataFrame.to_parquet = exploding
+    try:
+        with pytest.raises(OSError):
+            write_parquet_df(pd.DataFrame({"a": [9, 9]}), uri)
+    finally:
+        pd.DataFrame.to_parquet = real
+
+    assert list(read_parquet_df(uri)["a"]) == [1, 2, 3], "the old file was clobbered"
+    leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".tmp")]
+    assert not leftovers, f"temp file left behind: {leftovers}"

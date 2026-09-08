@@ -6,6 +6,7 @@ Phase 0 is local-first — artifacts live under ``data/`` (see CLAUDE.md).
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -108,9 +109,25 @@ def read_parquet_df(uri: str) -> pd.DataFrame:
 
 
 def write_parquet_df(df: pd.DataFrame, uri: str) -> None:
-    """Write a pandas DataFrame to Parquet (ZSTD)."""
+    """Write a pandas DataFrame to Parquet (ZSTD), atomically.
+
+    Write to a temp file in the same directory, then rename. A rename is atomic
+    on a POSIX filesystem, so a reader never sees a half-written file and a kill
+    mid-write leaves the previous version intact rather than a truncated one.
+
+    This matters because ``ingest-chips`` rewrites ``manifest.parquet`` every
+    minute for days. Writing in place made every one of those a window in which
+    losing the process lost the whole record of the run. The PID in the temp name
+    keeps two concurrent writers off each other.
+    """
     ensure_parent(uri)
-    df.to_parquet(uri, index=False, compression="zstd")
+    tmp = f"{uri}.{os.getpid()}.tmp"
+    try:
+        df.to_parquet(tmp, index=False, compression="zstd")
+        os.replace(tmp, uri)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 # GeoParquet helpers
