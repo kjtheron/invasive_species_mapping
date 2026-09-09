@@ -315,7 +315,16 @@ uv run cmrv ingest-chips --max-workers 16 --read-pool 8
 
 Detach with `Ctrl+b` then `d`.
 
-Start at 16×8, not the 20×4 used at home. Latency is now ~10 ms instead of 300 ms, so more requests must be in flight to keep 8 cores busy.
+Start at 16×8, not the 20×4 used at home. Latency is now ~10 ms instead of 300 ms, so more requests must be in flight.
+
+Measured on `Standard_D8ls_v6` at 16×8:
+
+```
+0.64 - 0.87 obs/s      home line was 0.075 obs/s  ->  about 11x faster
+load average 1.9 / 8   about 24% CPU
+```
+
+The job is **not** CPU-bound, despite the low latency. At 24% CPU the Planetary Computer rate limit is the ceiling, so a bigger VM does not help. Use `scripts/concurrency_probe.sh` to find the best setting for your own run.
 
 Watch for HTTP 429 in the log. That is the Planetary Computer rate limit, which `s2.stac_retry` absorbs with a jittered backoff. If 429s are frequent, step the concurrency down. **The rate limit, not bandwidth, is the new ceiling.**
 
@@ -343,7 +352,17 @@ azcopy sync ./data "https://<storage-account>.blob.core.windows.net/<container>/
 | Reading 2.6 TB from the Planetary Computer | **free** | the source account pays egress |
 | Upload from the workstation (ingress) | **free** | |
 
-Estimated cost of the full chipping job: **under $5**.
+Measured, not estimated. At 0.64-0.87 obs/s the remaining ~84,000 chips need **27 to 36 hours** of VM time:
+
+```
+VM      27-36 h x ~$0.44/hr   =  $12 - $16
+disk    27-36 h x ~$0.026/hr  =  $0.70 - $0.94
+IP      27-36 h x ~$0.005/hr  =  $0.14 - $0.18
+--------------------------------------------
+total                            $13 - $17
+```
+
+An earlier estimate of "3.5 hours, under $5" assumed the job would become CPU-bound once latency disappeared. It does not. Budget about **$20** for a full run from scratch.
 
 ```bash
 az vm deallocate -g $RG -n $VM        # stops compute charges, keeps the disk
