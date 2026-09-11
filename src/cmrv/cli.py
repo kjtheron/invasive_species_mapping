@@ -433,11 +433,17 @@ def embed(
     the frozen head replicates densely at inference. CRS-less + tiny, so it is a
     single Zarr regardless of source UTM zone. Needs the ``embed`` group.
 
+    Resumable: vectors checkpoint to ``<out>.parts/`` every 500 obs, so after any stop
+    (crash, reboot, Ctrl+C, pkill) re-run the same command and it continues.
+
     --device: ``cpu`` or ``cuda`` (cloud). --num-workers: chip-prefetch workers that
     overlap disk reads with the forward (raise on GPU to keep it fed). --amp: fp16/bf16
-    autocast (big GPU win; leave off on CPU). --batch default 2: the ViT's O(L^2)
-    attention over ``output_grid^2`` tokens dominates activations, and at 128 that is
-    16384 tokens — 16x the 64 px cost. Raise it on a bigger-VRAM GPU.
+    autocast: a big GPU win, and 2.6x on an AMX CPU (Xeon 4th gen+, measured 4.11 ->
+    1.56 s/chip at cosine 0.99998 to fp32). Leave it off on older CPUs, where it can
+    be slower. --batch default 2: attention runs over the 32x32 latent grid and one
+    upsampling pass makes the 128x128 output, so on CPU a bigger batch adds only RAM
+    (5.2 GB at 2, 8.7 GB at 4) and neither batch nor thread count changes s/chip.
+    Raise it on a GPU.
     """
     from cmrv.embeddings.embed import embed_chips
     from cmrv.embeddings.universat import UniverSatEmbedder

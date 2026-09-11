@@ -9,11 +9,19 @@ Throughput: a ``DataLoader`` with ``num_workers`` prefetches the next batch's ch
 off the main thread while the current batch is in the encoder forward — so disk
 reads overlap compute instead of alternating with it. The exact same loop runs on
 CPU or GPU (``device``); on GPU the prefetch is what keeps the device fed.
+
+Resumable: vectors are checkpointed to ``<out>.parts/`` every ``parts_every`` obs,
+written atomically, so a crash, reboot, Ctrl+C or ``pkill`` loses at most one part.
+A re-run embeds only the obs no part holds, then consolidates the single Zarr. Parts
+stay on disk after success, which also makes the verb incremental for new chips.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -25,6 +33,10 @@ from torch.utils.data import DataLoader, Dataset  # type: ignore
 
 from cmrv.embeddings.constants import MONTH_DOY
 from cmrv.embeddings.universat import UniverSatEmbedder
+from cmrv.ingest.chips import _term_saves_work
+
+PARTS_EVERY = 500  # obs per checkpoint part: the most a hard kill can lose (~13 min on CPU)
+LOG_SECONDS = 60.0
 
 
 def _load_stack(uri: str, n_months: int, scale: float) -> np.ndarray:
@@ -56,6 +68,42 @@ class _ChipDataset(Dataset):
         return _load_stack(uri, len(dvec), self.scale)
 
 
+def _signature(encoder, scale: float) -> dict:
+    """What must match before two runs' vectors may share one store.
+
+    A part written by another model, grid or DN scale would train the head on a
+    mixture with no error anywhere. ``amp`` is deliberately absent: bf16 and fp32
+    vectors agree to cosine 0.99998 (measured on real chips), so resuming a run in
+    the other precision is safe.
+    """
+    keys = ("name", "repo", "revision", "patch_size", "output_grid")
+    return {**{k: getattr(encoder, k, None) for k in keys}, "scale": scale}
+
+
+def _part_files(parts: Path) -> list[Path]:
+    return sorted(p for p in parts.glob("part_*.npz") if not p.name.endswith(".tmp.npz"))
+
+
+def _read_part(path: Path, keys: tuple[str, ...]) -> dict:
+    with np.load(path) as z:
+        return {k: z[k] for k in keys}
+
+
+def _save_part(parts: Path, index: int, pending: list) -> None:
+    """Write one part via temp + rename: a kill mid-write leaves a .tmp, never a torn part."""
+    recs = [r for chunk, _ in pending for r in chunk]
+    tmp, final = parts / f"part_{index:05d}.tmp.npz", parts / f"part_{index:05d}.npz"
+    np.savez(
+        tmp,
+        emb=np.concatenate([v for _, v in pending]).astype("float32"),
+        obs_id=np.array([r[0] for r in recs]),
+        block_id=np.array([r[1] for r in recs]),
+        lon=np.array([r[2] for r in recs], dtype="float64"),
+        lat=np.array([r[3] for r in recs], dtype="float64"),
+    )
+    os.replace(tmp, final)
+
+
 def embed_chips(
     manifest_uri: str,
     out_uri: str,
@@ -66,6 +114,7 @@ def embed_chips(
     min_valid_frac: float = 0.5,
     batch: int = 8,
     num_workers: int = 4,
+    parts_every: int = PARTS_EVERY,
 ) -> str:
     """Embed every obs with >= ``min_months`` present → single Zarr (emb + obs_id/block_id).
 
@@ -98,40 +147,96 @@ def embed_chips(
     if not recs:
         raise ValueError(f"no obs with >= {min_months} months present")
 
+    parts = Path(f"{out_uri}.parts")
+    parts.mkdir(parents=True, exist_ok=True)
+    sig, meta = _signature(encoder, scale), parts / "meta.json"
+    if meta.exists():
+        old = json.loads(meta.read_text())
+        if old != sig:
+            raise ValueError(
+                f"{parts} holds vectors from {old}, but this run is {sig}. "
+                f"Delete {parts} to re-embed from scratch."
+            )
+    else:
+        meta.write_text(json.dumps(sig))
+
+    files = _part_files(parts)
+    done = {str(o) for f in files for o in _read_part(f, ("obs_id",))["obs_id"]}
+    todo = [r for r in recs if r[0] not in done]
+    logger.info(
+        "{} obs: {} already embedded in {} parts, {} to go",
+        len(recs),
+        len(recs) - len(todo),
+        len(files),
+        len(todo),
+    )
+    if todo:
+        _embed_todo(todo, encoder, parts, len(files), scale, batch, num_workers, parts_every)
+    return _consolidate(parts, recs, out_uri)
+
+
+def _embed_todo(todo, encoder, parts, next_part, scale, batch, num_workers, parts_every) -> None:
+    """Embed ``todo`` in order, checkpointing a part every ``parts_every`` obs."""
     torch.set_num_threads(os.cpu_count() or 1)  # all cores for the forward
     loader = DataLoader(
-        _ChipDataset(recs, scale),
+        _ChipDataset(todo, scale),
         batch_size=batch,
-        shuffle=False,  # batches arrive in recs order → aligns with dvecs + metadata below
+        shuffle=False,  # batches arrive in todo order → slice the metadata alongside
         num_workers=num_workers,
         pin_memory=getattr(encoder, "device", "cpu").startswith("cuda"),
     )
-    dvecs = np.array([r[4] for r in recs])  # (N, T) per-obs day-of-year (zone-dependent)
-    embs, done = [], 0
-    for stacks in loader:  # (B, T, C, H, W) float32, prefetched by the workers
-        s = stacks.numpy()
-        b = s.shape[0]
-        embs.append(encoder.embed(s, dvecs[done : done + b]))
-        done += b
-        logger.info("embedded {}/{}", done, len(recs))
-    emb = np.concatenate(embs).astype("float32")
+    pending, n_pending, seen = [], 0, 0
+    t0 = last_log = time.time()
+    try:
+        with _term_saves_work():  # pkill takes the same finally as Ctrl+C
+            for stacks in loader:
+                chunk = todo[seen : seen + len(stacks)]
+                vec = encoder.embed(stacks.numpy(), np.array([r[4] for r in chunk]))
+                pending.append((chunk, vec))  # one append: ids and vectors cannot drift apart
+                n_pending += len(chunk)
+                seen += len(chunk)
+                if n_pending >= parts_every:
+                    _save_part(parts, next_part, pending)
+                    next_part, pending, n_pending = next_part + 1, [], 0
+                if time.time() - last_log >= LOG_SECONDS:
+                    last_log = time.time()
+                    spc = (last_log - t0) / seen
+                    logger.info(
+                        "embedded {}/{} this run — {:.2f} s/chip, eta {:.1f} h",
+                        seen,
+                        len(todo),
+                        spc,
+                        spc * (len(todo) - seen) / 3600,
+                    )
+    finally:
+        if pending:  # finished vectors are never thrown away, whatever stopped the loop
+            _save_part(parts, next_part, pending)
 
-    obs_ids = np.array([r[0] for r in recs])
-    block_ids = np.array([r[1] for r in recs])
-    # Point location is stored in the manifest as EPSG:4326 lon/lat (chips are extracted
-    # in each group's own native S2 UTM zone), so the cube is one global CRS directly.
-    lon = np.array([r[2] for r in recs], dtype="float64")
-    lat = np.array([r[3] for r in recs], dtype="float64")
+
+def _consolidate(parts: Path, recs: list, out_uri: str) -> str:
+    """Gather every part into the single obs-keyed Zarr the head reads."""
+    keys = ("emb", "obs_id", "block_id", "lon", "lat")
+    got = [_read_part(f, keys) for f in _part_files(parts)]
+    col = {k: np.concatenate([g[k] for g in got]) for k in keys}
+    if len(np.unique(col["obs_id"])) != len(col["obs_id"]):
+        raise ValueError(f"{parts} holds duplicate obs_ids — did two embed runs write at once?")
+    keep = np.isin(col["obs_id"], [r[0] for r in recs])  # drop obs the manifest no longer has
+    if keep.sum() != len(recs):
+        raise ValueError(f"{parts} covers {keep.sum()} of {len(recs)} obs — re-run to finish")
+
     ds = xr.Dataset(
-        {"emb": (("obs", "feat"), emb)},
+        {"emb": (("obs", "feat"), col["emb"][keep])},
         coords={
-            "obs_id": ("obs", obs_ids),
-            "block_id": ("obs", block_ids),
-            "lon": ("obs", np.asarray(lon, dtype="float64")),
-            "lat": ("obs", np.asarray(lat, dtype="float64")),
+            "obs_id": ("obs", col["obs_id"][keep]),
+            "block_id": ("obs", col["block_id"][keep]),
+            # Point location is stored in the manifest as EPSG:4326 lon/lat (chips are
+            # extracted in each group's own native S2 UTM zone), so the cube is one
+            # global CRS directly.
+            "lon": ("obs", col["lon"][keep]),
+            "lat": ("obs", col["lat"][keep]),
         },
         attrs={"crs": "EPSG:4326"},
     )
     ds.to_zarr(out_uri, mode="w")
-    logger.success("wrote {} embeddings ({}-d) → {}", len(recs), emb.shape[1], out_uri)
+    logger.success("wrote {} embeddings ({}-d) → {}", int(keep.sum()), col["emb"].shape[1], out_uri)
     return out_uri
