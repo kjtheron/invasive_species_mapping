@@ -369,3 +369,22 @@ def test_iterative_stratification_spreads_class_across_folds():
 
     assert set(out.loc[out["class_id"] == 0, "fold"]) == {"train", "val", "test"}
     assert set(b2f.values()) <= {"train", "val", "test"}
+
+
+def test_cover_gate_drops_only_sparse_or_unrecorded_alien_obs():
+    """The pure-pixel gate removes low- or no-cover alien points; natives always pass."""
+    import numpy as np
+    import pandas as pd
+
+    from cmrv.ingest.chips import cover_gate
+
+    labels = pd.DataFrame(
+        {
+            "obs_id": ["dense", "edge", "sparse", "unrecorded", "native", "grass", "no_rank"],
+            "taxon_rank": ["genus", "species", "species", "genus", "biome", "landcover", None],
+            "cover_pct": [100.0, 50.0, 1.0, np.nan, np.nan, np.nan, 5.0],
+        }
+    )
+    obs = pd.DataFrame({"obs_id": [*labels["obs_id"], "not_in_store"]})
+    kept = cover_gate(obs, labels, 50)["obs_id"].tolist()
+    assert kept == ["dense", "edge", "native", "grass", "no_rank", "not_in_store"]

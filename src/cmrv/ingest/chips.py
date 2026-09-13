@@ -1096,6 +1096,34 @@ def _labels_to_gdf(label_pts: pd.DataFrame, manifest: pd.DataFrame) -> gpd.GeoDa
     )
 
 
+IAP_RANKS = ("species", "genus")
+
+
+def cover_gate(obs: pd.DataFrame, labels: pd.DataFrame, min_cover_pct: float) -> pd.DataFrame:
+    """Drop IAP obs whose recorded ``cover_pct`` is below ``min_cover_pct`` (pure-pixel gate).
+
+    A 10 m pixel at 10 % cover is mostly something else under an alien label. Only
+    ``taxon_rank`` species/genus rows are gated: native and land-cover rows carry no
+    density (MapWAPS stores their 0 as empty), so gating them would delete every
+    MapWAPS savanna, burnt and wetland point. An IAP row with **no** recorded cover is
+    dropped as well: MapWAPS writes density 0 as empty, which cannot be told from
+    sparse. Obs absent from ``labels`` pass untouched.
+    """
+    lab = labels.drop_duplicates("obs_id", keep="last").set_index("obs_id")
+    iap = obs["obs_id"].map(lab["taxon_rank"]).isin(IAP_RANKS)
+    cover = obs["obs_id"].map(lab["cover_pct"])
+    fail = iap & ~(cover >= min_cover_pct)  # NaN compares False, so unrecorded fails
+    logger.info(
+        "cover gate >= {}%: dropping {} of {} IAP obs ({} below, {} with no cover recorded)",
+        min_cover_pct,
+        int(fail.sum()),
+        int(iap.sum()),
+        int((fail & cover.notna()).sum()),
+        int((fail & cover.isna()).sum()),
+    )
+    return obs[~fail]
+
+
 def make_split(
     manifest_uri: str,
     aoi_uri: str,
@@ -1110,6 +1138,8 @@ def make_split(
     min_class_obs: int = 0,
     out_prefix: str | None = None,
     lock_folds: bool = True,
+    min_cover_pct: float | None = None,
+    labels_root: str | None = None,
 ) -> pd.DataFrame:
     """Build a reproducible spatial split from a chip manifest.
 
@@ -1148,6 +1178,10 @@ def make_split(
     lock_folds : bool
         If True and ``out_prefix`` has an existing ``block_folds.parquet``, lock
         those block assignments and only assign new blocks.
+    min_cover_pct : float | None
+        Pure-pixel gate — see :func:`cover_gate`. ``None``/0 = off.
+    labels_root : str | None
+        Observation store the gate reads ``taxon_rank`` + ``cover_pct`` from.
     """
     from cmrv.io import read_gdf
 
@@ -1175,6 +1209,13 @@ def make_split(
 
     label_pts = manifest[["obs_id", "species", "block_id"]].drop_duplicates(subset=["obs_id"]).copy()
     label_pts.rename(columns={"species": "species_normalized"}, inplace=True)
+    if min_cover_pct:
+        from cmrv.labels.merge import _dedup_latest
+        from cmrv.labels.observations import PROCESSED_ROOT, read_all
+
+        store = _dedup_latest(read_all(labels_root or PROCESSED_ROOT))
+        store = store[["obs_id", "taxon_rank", "cover_pct"]]
+        label_pts = cover_gate(label_pts, store, min_cover_pct)
 
     # Resolve class_id BEFORE the split so we stratify on the actual training
     # target, drop unmapped species, and drop tiny classes — otherwise a spatially

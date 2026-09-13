@@ -13,9 +13,9 @@ def test_emitted_classes_resolve_in_landcover_map() -> None:
         BIOME_TO_CLASS.values()
     )
     # Emitted but deliberately not trained: the store keeps what SANLC surveys and
-    # make-split drops these. planted_forest left 2026-09-13 (gum OR pine, so it
-    # overlapped eucalyptus_spp and pinus_spp).
-    not_trained = {"planted_forest"}
+    # make-split drops these, both 2026-09-13: planted_forest (gum OR pine, so it
+    # overlapped eucalyptus_spp and pinus_spp) and albany_thicket (40 obs, 6 in test).
+    not_trained = {"planted_forest", "albany_thicket"}
     unresolved = {c for c in emitted if cm.resolve(c) is None}
     assert unresolved == not_trained, (
         f"adapter emits classes missing from the class map: {unresolved - not_trained}; "

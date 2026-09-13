@@ -40,7 +40,8 @@ class_maps:
     6:  {name: fynbos,          members: ["fynbos"]}
     7:  {name: succulent_karoo, members: ["succulent_karoo"]}
     8:  {name: nama_karoo,      members: ["nama_karoo"]}
-    9:  {name: albany_thicket,  members: ["albany_thicket"]}
+    # 9 albany_thicket removed 2026-09-13: 40 obs (6 in test) is too few to learn or to
+    # measure. SANLC/VegMap still emits it; make-split drops it. Do not reuse id 9.
     10: {name: forest,          members: ["forest"]}
     11: {name: azonal,          members: ["azonal"]}
     12: {name: grassland,       members: ["grassland"]}

@@ -305,6 +305,7 @@ def chips_make_split(
     val_frac: float = 0.15,
     min_class_obs: int = 0,
     lock_folds: bool = True,
+    min_cover_pct: float | None = None,
 ) -> None:
     """Generate a reproducible spatial split from the chip manifest.
 
@@ -322,10 +323,15 @@ def chips_make_split(
     --min-class-obs: drop classes with fewer than N obs before splitting (0 = keep
                      all). Use for classes too rare to appear in every fold.
     --lock-folds: re-use existing block_folds.parquet assignments.
+    --min-cover-pct: pure-pixel gate. Drop an alien (species/genus) obs whose recorded
+                     cover is below this, or missing. Natives and land cover are never
+                     gated. Defaults to ``min_cover_pct`` in pipeline.yaml; 0 = off.
     --aoi: defaults to ``aoi.train_path`` — must match what ``ingest-chips`` used,
            or nationally-chipped labels get clipped out of the split.
     """
     aoi = aoi or load_config(pipeline)["aoi"]["train_path"]
+    if min_cover_pct is None:
+        min_cover_pct = load_config(pipeline).get("min_cover_pct")
     result = make_split(
         manifest_uri=manifest,
         aoi_uri=aoi,  # type: ignore
@@ -339,6 +345,7 @@ def chips_make_split(
         min_class_obs=min_class_obs,
         out_prefix=out_prefix,
         lock_folds=lock_folds,
+        min_cover_pct=min_cover_pct,
     )
     logger.success(
         "make-split complete — {} obs_ids across {} species, {} classes",
