@@ -462,17 +462,23 @@ def train_head(
     arch: str = "linear",
     weight: str = "balanced",
     save: str | None = None,
+    exclude_source: list[str] | None = None,
 ) -> None:
     """Train a light head on frozen embeddings + report per-class test metrics.
 
-    --arch: ``linear`` (the adopted head — beat MLP on the current set) or ``mlp``.
+    --arch: ``linear`` or ``mlp``. On the 93k national set (2026-09-13) mlp beat linear
+            on field truth: MapWAPS test F1 0.660 vs 0.568.
     --weight: ``balanced`` (N/(K·n_c)), ``sqrt`` (gentler), or ``none``. Computed
               live from the train fold, so it tracks label updates automatically.
     --save: checkpoint path (weights + mu/sd + class ids) for `cmrv infer`.
+    --exclude-source: drop these sources (e.g. ``niaps``) from train and val. Their test
+                      rows stay, so per-source test F1 compares on identical rows.
     """
     from cmrv.embeddings.head import train_head as _train
 
-    per, macro = _train(emb, split, arch=arch, weight=weight, save=save)
+    per, macro = _train(
+        emb, split, arch=arch, weight=weight, save=save, exclude_sources=exclude_source
+    )
     print(per.to_string(index=False))
     logger.success("{} head ({} CE): test macro-F1 = {:.3f}", arch, weight, macro)
 

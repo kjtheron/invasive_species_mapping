@@ -70,8 +70,13 @@ def _ood_stats(
     threshold is the 97.5-pct of distances on the **held-out** ``xthr`` (out-of-sample),
     not the in-sample fit set — in-sample distances are far too tight and over-flag.
     """
-    means = np.stack([xfit[yfit == c].mean(0) for c in range(k)]).astype("float32")
-    cov = np.cov(xfit - means[yfit], rowvar=False) + eps * np.eye(xfit.shape[1])
+    # Means for fitted classes only. A class with test rows but no train rows (see
+    # exclude_sources) would get an empty, NaN mean and poison every distance; the
+    # distance is a min over means, so leaving it out is exact.
+    present = np.unique(yfit)
+    means = np.stack([xfit[yfit == c].mean(0) for c in present]).astype("float32")
+    centered = xfit - means[np.searchsorted(present, yfit)]
+    cov = np.cov(centered, rowvar=False) + eps * np.eye(xfit.shape[1])
     prec = np.linalg.inv(cov).astype("float32")
     thr = float(np.quantile(_maha(xthr.astype("float32"), means, prec), 0.975))
     return {"means": means, "prec": prec, "threshold": thr}
@@ -105,11 +110,17 @@ def train_head(
     patience: int = 60,
     seed: int = 42,
     save: str | None = None,
+    exclude_sources: list[str] | None = None,
 ):
     """Train a frozen-embedding head → ``(per_class_df, test_macro_f1)``.
 
     ``save`` writes a checkpoint (weights + standardization mu/sd + class ids) for
     wall-to-wall inference — reload with ``load_head``.
+
+    ``exclude_sources`` (e.g. ``["niaps"]``) drops those sources from **train and val
+    only**. Their test rows stay, so each per-source test score is computed on exactly
+    the rows a run without the exclusion scored. A class only an excluded source
+    supplies keeps its test rows but is never taught, so it scores F1 0.
     """
     import torch  # type: ignore
 
@@ -120,6 +131,15 @@ def train_head(
     split["obs_id"] = split["obs_id"].astype(str)
     df = split.merge(idx, on="obs_id", how="inner").dropna(subset=["class_id"])
     df["class_id"] = df["class_id"].astype(int)
+    if exclude_sources:
+        src = df["source"] if "source" in df.columns else df["obs_id"].str.split(":").str[0]
+        drop = src.isin(exclude_sources) & (df["fold"] != "test")
+        logger.info(
+            "excluding {} train/val obs from {}; their test rows are kept",
+            int(drop.sum()),
+            sorted(exclude_sources),
+        )
+        df = df[~drop]
 
     classes = np.sort(df["class_id"].unique())
     to_idx = {c: i for i, c in enumerate(classes)}

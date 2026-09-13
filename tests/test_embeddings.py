@@ -212,3 +212,46 @@ def test_embed_chips_refuses_parts_from_another_model(tmp_path):
     other.output_grid = 64
     with pytest.raises(ValueError, match="Delete"):
         embed_chips(man, out, other, batch=1, num_workers=0)
+
+
+def test_train_head_exclude_source_cannot_teach_and_keeps_test_rows(tmp_path):
+    """An excluded source never trains the head, but its test rows are still scored."""
+    import pandas as pd
+    import xarray as xr
+
+    from cmrv.embeddings.head import load_head, train_head
+
+    rng = np.random.default_rng(0)
+    n, m = 400, 40  # n rows of classes 0/1, then m rows of class 2 that only "noisy" has
+    y = np.concatenate([np.tile([0, 1], n // 2), np.full(m, 2)])
+    X = rng.normal(0, 0.1, (n + m, 8)).astype("float32")
+    for c in (0, 1, 2):
+        X[y == c, c] += 5.0
+    obs = [f"o{i}" for i in range(n + m)]
+    # Shuffled, not positional: a repeating fold pattern over alternating labels put
+    # every class-0 row in train/val and every test row in class 1.
+    folds = rng.permutation(np.resize(["train", "train", "val", "test"], n + m))
+    src = np.where((rng.random(n + m) < 0.6) | (y == 2), "noisy", "field")
+    # "noisy" train/val labels swap 0 and 1: a head that learns from it scores ~0 on them.
+    label = np.where((src == "noisy") & (folds != "test") & (y < 2), 1 - y, y)
+    xr.Dataset({"emb": (("obs", "feat"), X)}, coords={"obs_id": ("obs", np.array(obs))}).to_zarr(
+        tmp_path / "e.zarr"
+    )
+    pd.DataFrame({"obs_id": obs, "fold": folds, "source": src, "class_id": label}).to_parquet(
+        tmp_path / "s.parquet"
+    )
+    e, s, ckpt = str(tmp_path / "e.zarr"), str(tmp_path / "s.parquet"), str(tmp_path / "h.pt")
+
+    with_noisy = train_head(e, s, arch="linear", epochs=200)[0].set_index("class_id")
+    without = train_head(e, s, arch="linear", epochs=200, exclude_sources=["noisy"], save=ckpt)[0]
+    without = without.set_index("class_id")
+
+    # Recall, not F1: the untaught class-2 test rows must land on some taught class,
+    # which costs that class precision without saying anything about what it learned.
+    assert with_noisy.loc[[0, 1], "recall"].max() < 0.5  # learned the swapped labels
+    assert (without.loc[[0, 1, 2], "support"] > 0).all()  # every class is in the test fold
+    assert without.loc[[0, 1], "recall"].min() > 0.9  # learned only from "field"
+    assert without["support"].sum() == (folds == "test").sum()  # every test row still scored
+    assert without.loc[2, "f1"] == 0  # class 2 is noisy-only: kept in test, never taught
+    ood = load_head(ckpt)[4]  # the untaught class must not poison the OOD stats
+    assert np.isfinite(ood["means"]).all() and np.isfinite(ood["threshold"])

@@ -47,7 +47,10 @@ class_maps:
     # --- transformed / other (collapsed SANLC accuracy-point classes) ---
     13: {name: built_up,        members: ["built_up"]}
     14: {name: cultivated,      members: ["cultivated"]}
-    15: {name: planted_forest,  members: ["planted_forest"]}
+    # 15 planted_forest removed 2026-09-13: SANLC plantations are gum OR pine, so the class
+    # overlapped eucalyptus_spp/pinus_spp (63% of MapWAPS field gums were predicted as it).
+    # sanlc warn_unmapped now names planted_forest on purpose; make-split drops those obs.
+    # Do not reuse id 15.
     16: {name: bare,            members: ["bare"]}
     17: {name: water,           members: ["water"]}
     18: {name: wetland,         members: ["wetland"]}
