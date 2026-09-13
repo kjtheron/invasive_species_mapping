@@ -470,6 +470,9 @@ def train_head(
     weight: str = "balanced",
     save: str | None = None,
     exclude_source: list[str] | None = None,
+    sample_weights: bool = False,
+    class_map_name: str = "sa_landcover",
+    schema_path: str = "configs/labels_schema.yaml",
 ) -> None:
     """Train a light head on frozen embeddings + report per-class test metrics.
 
@@ -478,13 +481,27 @@ def train_head(
     --weight: ``balanced`` (N/(K·n_c)), ``sqrt`` (gentler), or ``none``. Computed
               live from the train fold, so it tracks label updates automatically.
     --save: checkpoint path (weights + mu/sd + class ids) for `cmrv infer`.
-    --exclude-source: drop these sources (e.g. ``niaps``) from train and val. Their test
-                      rows stay, so per-source test F1 compares on identical rows.
+    --exclude-source: drop these rows from train and val: a whole source (``niaps``) or
+                      named classes of it (``niaps:acacia_spp,pinus_spp``). Test rows
+                      stay, so per-source test F1 compares on identical rows.
+    --sample-weights: weight each row's loss by split.parquet's ``weight`` (NIAPS 0.5).
     """
+    from cmrv.embeddings.head import resolve_exclude_sources
     from cmrv.embeddings.head import train_head as _train
 
+    exclude = (
+        resolve_exclude_sources(exclude_source, schema_path, class_map_name)
+        if exclude_source
+        else None
+    )
     per, macro = _train(
-        emb, split, arch=arch, weight=weight, save=save, exclude_sources=exclude_source
+        emb,
+        split,
+        arch=arch,
+        weight=weight,
+        save=save,
+        exclude_sources=exclude,
+        sample_weights=sample_weights,
     )
     print(per.to_string(index=False))
     logger.success("{} head ({} CE): test macro-F1 = {:.3f}", arch, weight, macro)

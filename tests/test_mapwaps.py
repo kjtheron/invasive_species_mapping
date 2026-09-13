@@ -64,8 +64,14 @@ def test_burnt_and_bracken_are_landcover_not_taxa() -> None:
 def test_every_mapped_class_resolves_under_landcover() -> None:
     """The requirement: every _LULC_TO_CLASS target is a real sa_landcover member."""
     cm = build_lookup("configs/labels_schema.yaml", "sa_landcover")
-    for lulc, (member, _rank) in _LULC_TO_CLASS.items():
-        assert cm.resolve(member) is not None, f"{lulc} → {member!r} resolves to no class"
+    # Emitted but deliberately not trained; make-split drops these. Tecoma stans left
+    # 2026-09-13: 37 of 39 train obs sat in one 10 km block.
+    not_trained = {"Tecoma stans"}
+    unresolved = {m for m, _rank in _LULC_TO_CLASS.values() if cm.resolve(m) is None}
+    assert unresolved == not_trained, (
+        f"mapped to no class: {unresolved - not_trained}; "
+        f"listed as not trained but resolves: {not_trained - unresolved}"
+    )
 
 
 def test_poplar_resolves_to_populus_spp() -> None:

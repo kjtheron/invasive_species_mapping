@@ -214,15 +214,14 @@ def test_embed_chips_refuses_parts_from_another_model(tmp_path):
         embed_chips(man, out, other, batch=1, num_workers=0)
 
 
-def test_train_head_exclude_source_cannot_teach_and_keeps_test_rows(tmp_path):
-    """An excluded source never trains the head, but its test rows are still scored."""
+def _two_source_split(tmp_path, noisy_weight: float = 1.0):
+    """Classes 0/1 from "field" (true labels) and "noisy" (0/1 swapped in train/val),
+    plus class 2 that only "noisy" has. Returns (emb path, split path, folds)."""
     import pandas as pd
     import xarray as xr
 
-    from cmrv.embeddings.head import load_head, train_head
-
     rng = np.random.default_rng(0)
-    n, m = 400, 40  # n rows of classes 0/1, then m rows of class 2 that only "noisy" has
+    n, m = 400, 40
     y = np.concatenate([np.tile([0, 1], n // 2), np.full(m, 2)])
     X = rng.normal(0, 0.1, (n + m, 8)).astype("float32")
     for c in (0, 1, 2):
@@ -232,16 +231,23 @@ def test_train_head_exclude_source_cannot_teach_and_keeps_test_rows(tmp_path):
     # every class-0 row in train/val and every test row in class 1.
     folds = rng.permutation(np.resize(["train", "train", "val", "test"], n + m))
     src = np.where((rng.random(n + m) < 0.6) | (y == 2), "noisy", "field")
-    # "noisy" train/val labels swap 0 and 1: a head that learns from it scores ~0 on them.
     label = np.where((src == "noisy") & (folds != "test") & (y < 2), 1 - y, y)
     xr.Dataset({"emb": (("obs", "feat"), X)}, coords={"obs_id": ("obs", np.array(obs))}).to_zarr(
         tmp_path / "e.zarr"
     )
-    pd.DataFrame({"obs_id": obs, "fold": folds, "source": src, "class_id": label}).to_parquet(
-        tmp_path / "s.parquet"
-    )
-    e, s, ckpt = str(tmp_path / "e.zarr"), str(tmp_path / "s.parquet"), str(tmp_path / "h.pt")
+    weight = np.where(src == "noisy", noisy_weight, 1.0)
+    pd.DataFrame(
+        {"obs_id": obs, "fold": folds, "source": src, "class_id": label, "weight": weight}
+    ).to_parquet(tmp_path / "s.parquet")
+    return str(tmp_path / "e.zarr"), str(tmp_path / "s.parquet"), folds
 
+
+def test_train_head_exclude_source_cannot_teach_and_keeps_test_rows(tmp_path):
+    """An excluded source never trains the head, but its test rows are still scored."""
+    from cmrv.embeddings.head import load_head, train_head
+
+    e, s, folds = _two_source_split(tmp_path)
+    ckpt = str(tmp_path / "h.pt")
     with_noisy = train_head(e, s, arch="linear", epochs=200)[0].set_index("class_id")
     without = train_head(e, s, arch="linear", epochs=200, exclude_sources=["noisy"], save=ckpt)[0]
     without = without.set_index("class_id")
@@ -255,3 +261,39 @@ def test_train_head_exclude_source_cannot_teach_and_keeps_test_rows(tmp_path):
     assert without.loc[2, "f1"] == 0  # class 2 is noisy-only: kept in test, never taught
     ood = load_head(ckpt)[4]  # the untaught class must not poison the OOD stats
     assert np.isfinite(ood["means"]).all() and np.isfinite(ood["threshold"])
+
+
+def test_sample_weights_let_a_small_trusted_source_outvote_a_large_noisy_one(tmp_path):
+    """60% noisy rows at weight 0.1 carry less loss than 40% field rows at 1.0."""
+    from cmrv.embeddings.head import train_head
+
+    e, s, _ = _two_source_split(tmp_path, noisy_weight=0.1)
+    per = train_head(e, s, arch="linear", epochs=200, sample_weights=True)[0]
+    assert per.set_index("class_id").loc[[0, 1], "recall"].min() > 0.9
+
+
+def test_exclusion_mask_scopes_to_source_and_class():
+    """ "a:1" drops only class 1 of source a; "b" drops all of b; test rows never drop."""
+    import pandas as pd
+
+    from cmrv.embeddings.head import _exclusion_mask
+
+    df = pd.DataFrame(
+        {
+            "source": ["a", "a", "a", "b", "b", "c"],
+            "class_id": [1, 2, 1, 1, 3, 1],
+            "fold": ["train", "train", "test", "val", "test", "train"],
+        }
+    )
+    assert _exclusion_mask(df, ["a:1", "b"]).tolist() == [True, False, False, True, False, False]
+
+
+def test_resolve_exclude_sources_maps_class_names_to_ids():
+    from cmrv.embeddings.head import resolve_exclude_sources
+
+    got = resolve_exclude_sources(
+        ["niaps:acacia_spp,pinus_spp", "mapwaps"], "configs/labels_schema.yaml", "sa_landcover"
+    )
+    assert got == ["niaps:0", "niaps:1", "mapwaps"]
+    with pytest.raises(ValueError, match="unknown class"):
+        resolve_exclude_sources(["niaps:not_a_class"], "configs/labels_schema.yaml", "sa_landcover")

@@ -1181,7 +1181,8 @@ def make_split(
     min_cover_pct : float | None
         Pure-pixel gate — see :func:`cover_gate`. ``None``/0 = off.
     labels_root : str | None
-        Observation store the gate reads ``taxon_rank`` + ``cover_pct`` from.
+        Observation store read for the gate (``taxon_rank``, ``cover_pct``) and for the
+        per-row ``weight`` written into ``split.parquet``.
     """
     from cmrv.io import read_gdf
 
@@ -1209,12 +1210,12 @@ def make_split(
 
     label_pts = manifest[["obs_id", "species", "block_id"]].drop_duplicates(subset=["obs_id"]).copy()
     label_pts.rename(columns={"species": "species_normalized"}, inplace=True)
-    if min_cover_pct:
-        from cmrv.labels.merge import _dedup_latest
-        from cmrv.labels.observations import PROCESSED_ROOT, read_all
+    from cmrv.labels.merge import _dedup_latest
+    from cmrv.labels.observations import PROCESSED_ROOT, read_all
 
-        store = _dedup_latest(read_all(labels_root or PROCESSED_ROOT))
-        store = store[["obs_id", "taxon_rank", "cover_pct"]]
+    store = _dedup_latest(read_all(labels_root or PROCESSED_ROOT))
+    store = store[["obs_id", "taxon_rank", "cover_pct", "weight"]]
+    if min_cover_pct:
         label_pts = cover_gate(label_pts, store, min_cover_pct)
 
     # Resolve class_id BEFORE the split so we stratify on the actual training
@@ -1294,7 +1295,11 @@ def make_split(
         # measures agreement with the rule that generated it.
         one = manifest.drop_duplicates("obs_id").copy()
         one["source"] = one["obs_id"].astype(str).str.split(":").str[0]
-        cols = ["obs_id", "fold", "source"] + (["class_id"] if "class_id" in manifest.columns else [])
+        # The store's per-row loss weight (NIAPS 0.5, observed sources 1.0), defined once
+        # at ingest. train-head applies it only with --sample-weights.
+        one["weight"] = one["obs_id"].map(store.set_index("obs_id")["weight"]).fillna(1.0)
+        cols = ["obs_id", "fold", "source", "weight"]
+        cols += ["class_id"] if "class_id" in manifest.columns else []
         write_parquet_df(one[cols], f"{out_prefix}/split.parquet")
 
     for fold in ["train", "val", "test"]:

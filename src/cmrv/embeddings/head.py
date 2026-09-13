@@ -98,6 +98,38 @@ def _build_model(arch: str, in_dim: int, k: int, hidden: int):
     raise ValueError(f"arch must be 'linear' or 'mlp', got {arch!r}")
 
 
+def _exclusion_mask(df: pd.DataFrame, items: list[str]) -> pd.Series:
+    """Train/val rows to drop: each item is ``"source"`` or ``"source:<class_id>"``."""
+    src = df["source"] if "source" in df.columns else df["obs_id"].astype(str).str.split(":").str[0]
+    drop = pd.Series(False, index=df.index)
+    for item in items:
+        source, _, cid = item.partition(":")
+        hit = src == source
+        if cid:
+            hit &= df["class_id"] == int(cid)
+        drop |= hit
+    return drop & (df["fold"] != "test")
+
+
+def resolve_exclude_sources(items: list[str], schema_path: str, class_map_name: str) -> list[str]:
+    """``"niaps:acacia_spp,pinus_spp"`` → ``["niaps:0", "niaps:1"]``; a bare source passes."""
+    from cmrv.io import load_config
+
+    block = load_config(schema_path)["class_maps"][class_map_name]
+    ids = {v["name"]: int(k) for k, v in block.items()}
+    out = []
+    for item in items:
+        source, _, names = item.partition(":")
+        if not names:
+            out.append(source)
+            continue
+        for name in names.split(","):
+            if name not in ids:
+                raise ValueError(f"unknown class {name!r} in {item!r}; known: {sorted(ids)}")
+            out.append(f"{source}:{ids[name]}")
+    return out
+
+
 def train_head(
     emb_uri: str,
     split_uri: str,
@@ -111,16 +143,21 @@ def train_head(
     seed: int = 42,
     save: str | None = None,
     exclude_sources: list[str] | None = None,
+    sample_weights: bool = False,
 ):
     """Train a frozen-embedding head → ``(per_class_df, test_macro_f1)``.
 
     ``save`` writes a checkpoint (weights + standardization mu/sd + class ids) for
     wall-to-wall inference — reload with ``load_head``.
 
-    ``exclude_sources`` (e.g. ``["niaps"]``) drops those sources from **train and val
-    only**. Their test rows stay, so each per-source test score is computed on exactly
-    the rows a run without the exclusion scored. A class only an excluded source
-    supplies keeps its test rows but is never taught, so it scores F1 0.
+    ``exclude_sources`` (e.g. ``["niaps"]``, or ``["niaps:0"]`` for one class of it) drops
+    those rows from **train and val only**. Their test rows stay, so each per-source
+    test score is computed on exactly the rows a run without the exclusion scored. A
+    class only an excluded source supplies keeps its test rows but is never taught, so
+    it scores F1 0.
+
+    ``sample_weights`` multiplies each train row's loss by ``split.parquet``'s ``weight``
+    column (NIAPS 0.5), normalised so that all weights at 1.0 give the unweighted loss.
     """
     import torch  # type: ignore
 
@@ -132,12 +169,11 @@ def train_head(
     df = split.merge(idx, on="obs_id", how="inner").dropna(subset=["class_id"])
     df["class_id"] = df["class_id"].astype(int)
     if exclude_sources:
-        src = df["source"] if "source" in df.columns else df["obs_id"].str.split(":").str[0]
-        drop = src.isin(exclude_sources) & (df["fold"] != "test")
+        drop = _exclusion_mask(df, exclude_sources)
         logger.info(
-            "excluding {} train/val obs from {}; their test rows are kept",
+            "excluding {} train/val obs for {}; test rows are kept",
             int(drop.sum()),
-            sorted(exclude_sources),
+            exclude_sources,
         )
         df = df[~drop]
 
@@ -175,7 +211,20 @@ def train_head(
     model = _build_model(arch, int(emb.shape[1]), k, hidden)
 
     w = _class_weights(np.bincount(ytr, minlength=k).astype("float32"), weight)
-    loss_fn = torch.nn.CrossEntropyLoss(weight=torch.tensor(w, dtype=torch.float32))
+    cw = torch.tensor(w, dtype=torch.float32)
+    per_row = torch.nn.CrossEntropyLoss(weight=cw, reduction="none")
+    if sample_weights:
+        if "weight" not in df.columns:
+            raise ValueError("--sample-weights needs a weight column: re-run make-split")
+        sw = torch.tensor(df.loc[df["fold"] == "train", "weight"].to_numpy(), dtype=torch.float32)
+    else:
+        sw = torch.ones(len(ytr))
+
+    def loss_fn(logits, y):
+        # PyTorch's own normaliser (the targets' class weights), weighted by row: with
+        # every sample weight at 1.0 this is exactly CrossEntropyLoss(weight=cw).
+        return (per_row(logits, y) * sw).sum() / (cw[y] * sw).sum()
+
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
     best_f1, best_state, bad = -1.0, None, 0
